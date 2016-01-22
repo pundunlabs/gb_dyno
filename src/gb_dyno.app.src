@@ -1,0 +1,16 @@
+{application, gb_dyno,
+ [
+  {description, "Distributed System Framework"},
+  {vsn, "1.0"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+		  gb_conf,
+		  gb_log,
+		  gb_hash,
+		  enterdb
+                 ]},
+  {mod, { gb_dyno_app, []}},
+  {env, []}
+ ]}.

@@ -1,0 +1,10 @@
+# GB_DYNO Application configuration file
+---
+app_name : gb_dyno
+params   :
+    # @cluster: Name of the cluster that this node belongs to.
+    cluster	: "cl01"
+    # @dc: Data center name that this node belongs to.
+    dc		: "dc01"
+    # @rack: Rack name that this node belongs to.
+    rack	: "rack01"

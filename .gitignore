@@ -1,0 +1,55 @@
+# ignore any file generated under ebin dirs
+ebin
+*.beam
+
+# ignore dependencies folder
+deps
+
+#docs
+doc
+!doc/overview.edoc
+
+#eunit
+.eunit
+
+#common test
+test/logs
+
+#asn1 generated file
+src/APOLLO-PDU-Descriptions.asn1db
+src/APOLLO-PDU-Descriptions.erl
+src/APOLLO-PDU-Descriptions.hrl
+
+# ignore sasl_log
+sasl_log
+
+#ignore autodeps
+*.autodeps
+
+# ignore any compiled c-code under system architecture directory
+x86_64-unknown-linux-gnu
+
+#ignore emacs bkp + autostore
+*~
+*\#
+*/.#*
+erl_crash.dump
+
+#ignore vim swap files
+*.swp
+
+#ignore generated libraries
+*.so*
+*.o
+
+# ignore .plts (Dialyzer PLT directory)
+.plts
+*.plt
+
+#ignore release
+rel/pundun
+rel/files
+
+#other
+.concrete/DEV_MODE
+.rebar
