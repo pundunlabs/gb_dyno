@@ -24,9 +24,22 @@
 
 %% API
 -export([init/1,
-	 merge_metadata/2]).
+	 store_topo/1,
+	 lookup_topo/0,
+	 lookup_topo/1,
+	 fetch_topo_history/0,
+	 pull_topo/1,
+	 remove_node/0]).
+
+%%Exports for testing purpose
+-export([merge_topo/3]).
 
 -type proplist() :: [{atom(), term()}].
+-type key() :: [{string(), term()}].
+-type value() :: [{string(), term()}].
+-type kvp() :: {key(), value()}.
+
+-define(ALG, sha).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -36,7 +49,7 @@
 -spec init(Opts :: proplist()) ->
     ok.
 init(Opts) ->
-    case enterdb:read("metadata_ix", [{"tag", "topo"}, {"ix", 1}]) of
+    case enterdb:read("gb_dyno_topo_ix", [{"ix", 1}]) of
 	{ok, _Hash} ->
 	    ok;
 	{error,"no_table"} ->
@@ -47,79 +60,272 @@ init(Opts) ->
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Merge metadata of two nodes.
+%% Create tables for metadata.
 %% @end
 %%--------------------------------------------------------------------
--spec merge_metadata({Node1 :: atom(), Data1 :: proplist()},
-		     {Node2 :: atom(), Data2 :: proplist()}) ->
-    {ok, Merged :: proplist()} | {error, Reason :: term()}.
-merge_metadata({Node1, Data1}, {Node2, Data2}) ->
-    Node1Cluster = proplists:get_value(cluster, Data1), 
-    Node2Cluster = proplists:get_value(cluster, Data2), 
-    merge_metadata(Node1Cluster, Node2Cluster,
-		   {Node1, Data1}, {Node2, Data2}).
+-spec create_metadata(Options :: proplist()) ->
+    ok.
+create_metadata(Options) ->
+    Cluster = proplists:get_value(cluster, Options), 
+    DC = proplists:get_value(dc, Options), 
+    Rack = proplists:get_value(rack, Options),
 
--spec merge_metadata(LC :: string(),
-		     RC :: string(),
-		     {Node1 :: atom(), Data1 :: proplist()},
-		     {Node2 :: atom(), Data2 :: proplist()}) ->
-    {ok, Merged :: proplist()} | {error, Reason :: term()}.
-merge_metadata(C, C, ND1, ND2) ->
-    merge_nodes(ND1, ND2, [{cluster, C}]);
-merge_metadata(_, _, _, _) ->
-    {error, "different_clusters"}.
+    Data = ordsets:from_list([{version, 1}, {dc, DC}, {rack, Rack}]),
+    NodeData = [{node(), Data}],
+    Metadata = [{cluster, Cluster}, {nodes, NodeData}],
 
--spec merge_nodes({Node1 :: atom(), Data1 :: proplist()},
-		  {Node2 :: atom(), Data2 :: proplist()},
-		  Acc :: proplist()) ->
-    {ok, Merged :: [{atom(), term()}]}.
-merge_nodes({Node1, Data1}, {Node2, Data2}, Acc) ->
-    Nodes1 = proplists:get_value(nodes, Data1), 
-    Nodes2 = proplists:get_value(nodes, Data2),
-    case merge_nodes({Node1, Nodes1}, {Node2, Nodes2}) of
-	{ok, Nodes} ->
-	    {ok, lists:reverse([{nodes, Nodes} | Acc])};
+    Hash = gb_hash:hash(?ALG, Metadata),
+    
+    {error,"no_table"} = enterdb:table_info("gb_dyno_metadata", [name]),
+    TabOpts = [{type, leveldb},
+	       {data_model, binary},
+	       {comparator, descending},
+	       {time_series, false},
+	       {shards, 1}],
+
+    ok = enterdb:create_table("gb_dyno_topo_ix",
+			      ["ix"], ["hash"], [], TabOpts),
+    ok = enterdb:create_table("gb_dyno_metadata",
+			      ["tag", "hash"], ["data"], [], TabOpts),
+    ok = enterdb:write("gb_dyno_topo_ix",
+		       [{"ix", 1}], [{"hash", Hash}]),
+    ok = enterdb:write("gb_dyno_metadata",
+		       [{"tag", "topo"}, {"hash", Hash}],
+		       [{"data", Metadata}]).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Open already existing metadata tables.
+%% @end
+%%--------------------------------------------------------------------
+-spec open_tables() ->
+    ok.
+open_tables() ->
+    ok = enterdb:open_table("gb_dyno_topo_ix"),
+    ok = enterdb:open_table("gb_dyno_metadata"),
+    {ok, _} = enterdb:read("gb_dyno_topo_ix", [{"ix", 1}]),
+    ok.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Store new metadata with topo(topology) tag. The stored data
+%% represents the dyno topology from a local point of view.
+%% @end
+%%--------------------------------------------------------------------
+-spec store_topo(Metadata :: proplist()) ->
+    ok | {error, Reason :: term()}.
+store_topo(Metadata) ->
+    {ok, {[{"ix", Ix}], _}, _} = enterdb:first("gb_dyno_topo_ix"),
+
+    Hash = gb_hash:hash(?ALG, Metadata),
+    ok = enterdb:write("gb_dyno_topo_ix",
+		       [{"ix", Ix + 1}], [{"hash", Hash}]),
+    ok = enterdb:write("gb_dyno_metadata",
+		       [{"tag", "topo"}, {"hash", Hash}],
+		       [{"data", Metadata}]).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Lookup latest topology metadata.
+%% @end
+%%--------------------------------------------------------------------
+-spec lookup_topo() ->
+    {ok, Metadata :: proplist()} | {error, Reason :: term()}.
+lookup_topo() ->
+    {ok,{_, [{"hash", Hash}]}, _} = enterdb:first("gb_dyno_topo_ix"),
+    lookup_topo(Hash).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Lookup for a topology metadata that is identified by it's hash
+%% value.
+%% @end
+%%--------------------------------------------------------------------
+-spec lookup_topo(Hash :: integer()) ->
+    {ok, Metadata :: proplist()} | {error, Reason :: term()}.
+lookup_topo(Hash) ->
+    case enterdb:read("gb_dyno_metadata",[{"tag", "topo"}, {"hash", Hash}]) of
+	{ok, [{"data", Metadata}]} ->
+	    {ok, Metadata};
+	{error,{not_found, _}} ->
+	    {error, not_found}
+    end.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Get all data stored in gb_dyno_topo_ix.
+%% @end
+%%--------------------------------------------------------------------
+-spec fetch_topo_history() ->
+    {ok, History :: [kvp()]} | {error, Reason :: term()}.
+fetch_topo_history() ->
+    {ok, {Key, _}, _} = enterdb:first("gb_dyno_topo_ix"),
+    fetch_topo_history(Key, []).
+
+-spec fetch_topo_history(Cont :: term(), Acc :: [term()]) ->
+     {ok, History :: [kvp()]} | {error, Reason :: term()}.
+fetch_topo_history(Cont, Acc) ->
+    case enterdb:read_range("gb_dyno_topo_ix", {Cont, [{"ix", 0}]}, 1000) of
+	{ok, List, complete} ->
+	    {ok, lists:append(Acc, List)};
+	{ok, List, NewCont} ->
+	    fetch_topo_history(NewCont, lists:append(Acc,List));
 	{error, Reason} ->
 	    {error, Reason}
     end.
 
--spec merge_nodes({Node1 :: atom(), Nodes1 :: proplist()},
-		  {Node2 :: atom(), Nodes2 :: proplist()}) ->
-    {ok, Nodes :: proplist()} | {error, Reason :: term()}.
-merge_nodes({Node1, Nodes1}, {Node2, Nodes2}) ->
-    Map = maps:from_list(Nodes1),
-    case check_conflict(Node1, Node2, Map, Nodes2) of
-	{ok, AddNodes} ->
-	    NewMap = maps:merge(Map, maps:from_list(AddNodes)),
-	    Merged = maps:to_list(NewMap),
-	    {ok, lists:sort(fun compare_nodes/2, Merged)};
-	{error, {conflict, Node}} ->
-	    {error, {conflict, Node}}
+%%--------------------------------------------------------------------
+%% @doc
+%% Fetch latest topology metadata from given node and merge with local
+%% topology metadata. Merge suceeds only if two metadata are for same 
+%% cluster.
+%% @end
+%%--------------------------------------------------------------------
+-spec pull_topo(Node :: node()) ->
+    {ok, Merged :: proplist()} |
+    {error, Reason :: string() | {conflict, Node :: node()}}.
+pull_topo(Node) ->
+    case rpc:call(Node, ?MODULE, fetch_topo_history, []) of
+	{ok, History} ->
+	    {ok, Base, Local, Remote} = find_versions(Node, History),
+	    merge_topo(Base, Local, Remote);
+	{error, Reason} ->
+	    {error, Reason}
     end.
 
--spec check_conflict(Node1 :: atom(), Node2 :: atom(),
-		     Map :: map(), Nodes2 :: proplist()) ->
-    {ok, Nodes :: proplist()} | {error, {conflict, Node :: atom()}}.
-check_conflict(Node1, Node2, Map, Nodes2) ->
-    check_conflict(Node1, Node2, Map, Nodes2, []).
+-spec find_versions(Node :: node(), History :: [kvp()])->
+    {ok, Base :: proplist(), Local :: proplist(), Remote :: proplist()}.
+find_versions(Node, History = [{_, [{_, RemoteHash}]} | _]) ->
+    HashMap = maps:from_list([{H, true} || {_, [{_, H}]} <- History]),
+    {ok, Remote} = rpc:call(Node, ?MODULE, lookup_topo, [RemoteHash]),
 
--spec check_conflict(Node1 :: atom(), Node2 :: atom(),
-		     Map :: map(), Nodes2 :: proplist(),
-		     Acc :: proplist()) ->
-    {ok, Nodes :: proplist()} | {error, {conflict, Node :: atom()}}.
-check_conflict(Node1, Node2, Map, [{Node1, _Data} | Rest], Acc) ->
-    check_conflict(Node1, Node2, Map, Rest, Acc);
-check_conflict(Node1, Node2, Map, [{Node2, Data} | Rest], Acc) ->
-    check_conflict(Node1, Node2, Map, Rest, [{Node2, Data} | Acc]);
-check_conflict(Node1, Node2, Map, [{Node, Data} | Rest], Acc) ->
+    {ok, LocalHistory = [{_, [{_, LocalHash}]} | _]} = fetch_topo_history(),
+    {ok, Local} = lookup_topo(LocalHash),
+
+    {ok, Base} = find_common_ancestor(LocalHistory, HashMap),
+
+    {ok, Base, Local, Remote}.
+
+-spec find_common_ancestor(History :: [kvp()], Map :: map()) ->
+    {ok, Metadata :: proplist()} | {error, Reason :: term()}.
+find_common_ancestor([{_, [{_, Hash}]} | Rest], Map) ->
+    case maps:is_key(Hash, Map) of
+	true ->
+	    lookup_topo(Hash);
+	false ->
+	    find_common_ancestor(Rest, Map)
+    end;
+find_common_ancestor([], _Map) ->
+    {ok, []}.
+
+-spec merge_topo(Base :: proplist(),
+		 Local :: proplist(),
+		 Remote :: proplist()) ->
+    {ok, Merged :: proplist()} | {error, Reason :: term()}.
+merge_topo(Base, Local, Remote) ->
+    Cluster = proplists:get_value(cluster, Local),
+    case proplists:get_value(cluster, Remote) of
+	Cluster ->
+	    BaseNodes = proplists:get_value(nodes, Base, []),
+	    LocalNodes = proplists:get_value(nodes, Local),
+	    RemoteNodes = proplists:get_value(nodes, Remote),
+	    case merge_nodes(BaseNodes, LocalNodes, RemoteNodes) of
+		{ok, MergedNodes} ->
+		    {ok, [{cluster, Cluster}, {nodes, MergedNodes}]};
+		{error, Reason} ->
+		    {error, Reason}
+	    end;
+	_ ->
+	    {error, "different_clusters"}
+    end.
+
+-spec merge_nodes(Base :: proplist(),
+		  Local :: proplist(),
+		  Remote :: proplist()) ->
+    {ok, Merged :: proplist()} | {error, Reason :: term()}.
+merge_nodes(Base, Local, Remote) ->
+    RMap = maps:from_list(Remote),
+    {Same, LDiff, RDiff} = nodes_diff(Local, RMap),
+    BMap = maps:from_list(Base),
+    {Updates, Conflicts} = nodes_base_comp(LDiff, RDiff, BMap),
+    case Conflicts of
+	[] ->
+	    Merged = Same ++ Updates,
+	    {ok, lists:sort(fun compare_nodes/2, Merged)};
+	_ ->
+	    {error, {conflict, Conflicts}}
+    end.
+
+-spec nodes_diff(Nodes :: proplist(), Map :: map()) ->
+    {Same :: proplist(), LDiff :: proplist(), RDiff :: proplist()}.
+nodes_diff(Nodes, Map) ->
+    nodes_diff(Nodes, Map, [], [], []).
+
+-spec nodes_diff(Nodes :: proplist(), Map :: map(), Same :: proplist(),
+		 LDiff :: proplist(), RDiff :: proplist()) ->
+    {Same :: proplist(), LDiff :: proplist(), RDiff :: proplist()}.
+nodes_diff([{Node, Data} | Rest], Map, Same, LDiff, RDiff) ->
+    NewMap = maps:remove(Node, Map),
     case maps:get(Node, Map, Data) of
         Data ->
-	   check_conflict(Node1, Node2, Map, Rest, Acc);
-        _ ->
-	   {error, {conflict, Node}}
+	    nodes_diff(Rest, NewMap, [{Node, Data} | Same], LDiff, RDiff);
+        RData ->
+	    nodes_diff(Rest, NewMap, Same,
+		       [{Node, Data} | LDiff], [{Node, RData} |RDiff])
     end;
-check_conflict(_, _, _Map, [], Acc) ->
-    {ok, Acc}.
+nodes_diff([], Map, Same, LDiff, RDiff) ->
+    RemoteExclusive = maps:to_list(Map),
+    {Same ++ RemoteExclusive, LDiff, RDiff}.
+
+-spec nodes_base_comp(LDiff :: proplist(),
+		      RDiff :: proplist(),
+		      BMap :: map()) ->
+    {Updates :: proplist(), Conflicts :: [{node(), term()}]}.
+nodes_base_comp(LDiff, RDiff, BMap) ->
+    nodes_base_comp(LDiff, RDiff, BMap, [], []).
+
+-spec nodes_base_comp(LDiff :: proplist(),
+		      RDiff :: proplist(),
+		      BMap :: map(),
+		      Updates :: proplist(),
+		      Conflicts :: [{proplist(), proplist()}]) ->
+    {Updates :: proplist(), Conflicts :: [{node(), term()}]}.
+nodes_base_comp([{Node, LData} | LDiff], [{Node, RData} | RDiff], BMap,
+		Updates, Conflicts) ->
+    case maps:get(Node, BMap, undefined) of
+        LData ->
+	    nodes_base_comp(LDiff, RDiff, BMap,
+			    [{Node, RData} | Updates], Conflicts);
+        RData ->
+	    nodes_base_comp(LDiff, RDiff, BMap,
+			    [{Node, LData} | Updates], Conflicts);
+	_ ->
+	    case resolve_conflict(LData, RData) of
+		{ok, Data} ->
+		    nodes_base_comp(LDiff, RDiff, BMap,
+				    [{Node, Data} | Updates], Conflicts);
+		{nok, Conflict} ->
+		    nodes_base_comp(LDiff, RDiff, BMap, Updates,
+				    [{Node, Conflict} | Conflicts])
+	    end
+    end;
+nodes_base_comp([], [], _BMap, Updates, Conflicts) ->
+    {Updates, Conflicts}.
+
+-spec resolve_conflict(LData :: proplist(), RData :: proplist()) ->
+    {ok, Data:: proplist()} |
+    {nok, {LData :: proplist(), RData :: proplist()}}.
+resolve_conflict(LData, RData) ->
+    LVersion = proplists:get_value(version, LData),
+    RVersion = proplists:get_value(version, RData),
+    if
+	LVersion == RVersion ->
+	    {nok, {LData, RData}};
+	LVersion > RVersion ->
+	    {ok, LData};
+	true ->
+	    {ok, RData}
+    end.	
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -127,8 +333,8 @@ check_conflict(_, _, _Map, [], Acc) ->
 %% Orders first on dc, second on rack, and last on node name. 
 %% @end
 %%--------------------------------------------------------------------
--spec compare_nodes({NodeA :: atom(), DataA :: proplist()},
-		    {NodeB :: atom(), DataB :: proplist()}) ->
+-spec compare_nodes({NodeA :: node(), DataA :: proplist()},
+		    {NodeB :: node(), DataB :: proplist()}) ->
     true | false.
 compare_nodes({NodeA, DataA},
 	      {NodeB, DataB}) ->
@@ -155,49 +361,38 @@ compare_attribute(A, B) ->
 	A > B -> false;
 	true -> equal
     end.
+
 %%--------------------------------------------------------------------
 %% @doc
-%% Create tables for metadata.
+%% Remove local node from topology (metadata).
 %% @end
 %%--------------------------------------------------------------------
--spec create_metadata(Options :: proplist()) ->
-    ok.
-create_metadata(Options) ->
-    Cluster = proplists:get_value(cluster, Options), 
-    DC = proplists:get_value(dc, Options), 
-    Rack = proplists:get_value(rack, Options),
+-spec remove_node() ->
+    ok | {error, Reason :: term()}.
+remove_node() ->
+    node_update({removed, true}).
 
-    NodeData = [{node(), [{dc, DC}, {rack, Rack}]}],
-    MetaData = [{cluster, Cluster}, {nodes, NodeData}],
-
-    Hash = gb_hash:hash(sha, MetaData),
+%%--------------------------------------------------------------------
+%% @doc
+%% Update a property of node data that is kept in topology (metadata).
+%% @end
+%%--------------------------------------------------------------------
+-spec node_update({Prop :: atom(), Value :: term()}) ->
+    ok | {error, Reason :: term()}.
+node_update({Prop, Value}) ->
+    {ok, Metadata} = lookup_topo(),
+    Cluster = proplists:get_value(cluster, Metadata),
+    Nodes = proplists:get_value(nodes, Metadata),
+    N = node(),
+    Data = proplists:get_value(N, Nodes),
     
-    {error,"no_table"} = enterdb:table_info("metadata", [name]),
-    TabOpts = [{type, leveldb},
-	       {data_model, binary},
-	       {comparator, descending},
-	       {time_series, false},
-	       {shards, 1}],
-
-    ok = enterdb:create_table("metadata_ix",
-			      ["tag", "ix"], ["hash"], [], TabOpts),
-    ok = enterdb:create_table("metadata",
-			      ["tag", "hash"], ["data"], [], TabOpts),
-    ok = enterdb:write("metadata_ix",
-		       [{"tag", "topo"}, {"ix", 1}], [{"hash", Hash}]),
-    ok = enterdb:write("metadata",
-		       [{"tag", "topo"}, {"hash", Hash}],
-		       [{"data", MetaData}]).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Open already existing metadata tables.
-%% @end
-%%--------------------------------------------------------------------
--spec open_tables() ->
-    ok.
-open_tables() ->
-    ok = enterdb:open_table("metadata_ix"),
-    ok = enterdb:open_table("metadata"),
-    {ok, _} = enterdb:read("metadata_ix", [{"tag", "topo"},{"ix", 1}]),
-    ok.
+    Version = proplists:get_value(version, Data),
+    D1 = proplists:delete(Prop, Data),
+    D2 = proplists:delete(version, D1),
+    D3 = ordsets:add_element({version, Version + 1}, D2),
+    D4 = ordsets:add_element({Prop, Value}, D3),
+    
+    NewNodes = [{N, D4} | proplists:delete(N, Nodes)],
+    SortedNodes = lists:sort(fun compare_nodes/2, NewNodes), 
+    NewMetadata = [{cluster, Cluster}, {nodes, SortedNodes}],
+    store_topo(NewMetadata).
