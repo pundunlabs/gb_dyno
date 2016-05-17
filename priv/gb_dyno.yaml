@@ -2,6 +2,7 @@
 ---
 app_name : gb_dyno
 params   :
+    reachability_check_interval : 60000
     # @cluster: Name of the cluster that this node belongs to.
     cluster	: "cl01"
     # @dc: Data center name that this node belongs to.

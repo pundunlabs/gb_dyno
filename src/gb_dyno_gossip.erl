@@ -25,7 +25,8 @@
 -behaviour(gen_server).
 
 %% API functions
--export([start_link/1]).
+-export([start_link/1,
+	 pull/1]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -35,9 +36,13 @@
          terminate/2,
          code_change/3]).
 
--record(state, {cluster,
+-record(state, {hash,
+		cluster,
 		dc,
 		rack}).
+
+-include("gb_log.hrl").
+-define(TIMEOUT, 5000).
 
 %%%===================================================================
 %%% API functions
@@ -56,7 +61,16 @@ start_link(Options) ->
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
-
+-spec pull(RemoteNode :: node()) ->
+    ok | {error, Reason :: term()}.
+pull(RemoteNode) ->
+    case gb_dyno_metadata:pull_topo(RemoteNode) of
+	{ok, Metadata} ->
+	    {ok, Hash} = gb_dyno_metadata:commit_topo(Metadata),
+	    gen_server:cast({?MODULE, node()}, {commit, Hash, Metadata});
+	{error, Reason} ->
+	    {error, Reason}
+    end.
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
@@ -69,10 +83,12 @@ start_link(Options) ->
 %% @end
 %%--------------------------------------------------------------------
 init(Options) ->
+    Hash = proplists:get_value(hash, Options),
     Cluster = proplists:get_value(cluster, Options), 
     DC = proplists:get_value(dc, Options), 
-    Rack = proplists:get_value(rack, Options), 
-    {ok, #state{cluster = Cluster,
+    Rack = proplists:get_value(rack, Options),
+    {ok, #state{hash = Hash,
+		cluster = Cluster,
 		dc = DC,
 		rack = Rack}}.
 
@@ -90,8 +106,15 @@ init(Options) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call(_Request, _From, State) ->
-    Reply = ok,
+handle_call({pull_request, Hash, _}, _From, State = #state{hash = Hash}) ->
+    ?debug("pull_request for same hash: ~p", [Hash]),
+    {reply, ok, State};
+handle_call({pull_request, _, RemoteNode}, _From, State) ->
+    ?debug("pull_request from ~p", [RemoteNode]),
+    erlang:spawn(?MODULE, pull, [RemoteNode]),
+    {reply, ok, State};
+handle_call(Request, _From, State) ->
+    Reply = ?warning("Unhandled call request: ~p", [Request]),
     {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
@@ -104,7 +127,20 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast(_Msg, State) ->
+handle_cast({commit, Hash, _}, State = #state{hash = Hash}) ->
+    ?debug("commit notification for same hash: ~p", [Hash]),
+    {noreply, State};
+handle_cast({commit, Hash, Metadata}, State) ->
+    ?debug("commit notification", []),
+    gb_dyno_reachability:metadata_update(Metadata),
+    NodesData = proplists:get_value(nodes, Metadata),
+    Nodes = [N || {N, _} <- NodesData, N =/= node()],
+    {Replies, BadNodes} =
+	gen_server:multi_call(Nodes, ?MODULE, {pull_request, Hash, node()}, ?TIMEOUT),
+    gb_dyno_reachability:multi_call_result(Replies, BadNodes),
+    {noreply, State#state{hash = Hash}};
+handle_cast(Msg, State) ->
+    ?warning("Unhandled cast message: ~p", [Msg]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------

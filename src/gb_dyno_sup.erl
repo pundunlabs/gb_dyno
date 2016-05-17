@@ -50,10 +50,14 @@ init([]) ->
     SupFlags = {RestartStrategy, MaxRestarts, MaxSecondsBetweenRestarts},
  
     GB_Dyno_Opts = get_gb_dyno_options(),
-    GB_Dyno_Gossip = ?WORKER(gb_dyno_gossip, GB_Dyno_Opts),
+    {ok, Hash} = init_metadata(GB_Dyno_Opts),
 
-    ok = init_metadata(GB_Dyno_Opts),
-    {ok, { SupFlags, [GB_Dyno_Gossip]} }.
+    Gossip_Opts = [{hash, Hash} | GB_Dyno_Opts],
+    GB_Dyno_Gossip = ?WORKER(gb_dyno_gossip, [Gossip_Opts]),
+    GB_Dyno_Reachability = ?WORKER(gb_dyno_reachability, [GB_Dyno_Opts]),
+
+
+    {ok, { SupFlags, [GB_Dyno_Reachability, GB_Dyno_Gossip]} }.
 
 %% ===================================================================
 %% Internal Functions
@@ -61,10 +65,12 @@ init([]) ->
 -spec get_gb_dyno_options() ->
     Options :: [{atom(), term()}].
 get_gb_dyno_options() ->
+    RC_Int = gb_conf:get_param("gb_dyno.yaml", reachability_check_interval),
     Cluster = gb_conf:get_param("gb_dyno.yaml", cluster),
     DC = gb_conf:get_param("gb_dyno.yaml", dc),
     Rack = gb_conf:get_param("gb_dyno.yaml", rack),
-    [{cluster, Cluster}, {dc, DC}, {rack, Rack}].
+    [{reachability_check_interval, RC_Int},
+     {cluster, Cluster}, {dc, DC}, {rack, Rack}].
 
 -spec init_metadata(Opts :: [{atom(), term()}]) ->
     ok.

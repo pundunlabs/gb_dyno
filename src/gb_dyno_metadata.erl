@@ -24,7 +24,7 @@
 
 %% API
 -export([init/1,
-	 store_topo/1,
+	 commit_topo/1,
 	 lookup_topo/0,
 	 lookup_topo/1,
 	 fetch_topo_history/0,
@@ -47,11 +47,11 @@
 %% @end
 %%--------------------------------------------------------------------
 -spec init(Opts :: proplist()) ->
-    ok.
+    {ok, Hash :: integer()}.
 init(Opts) ->
     case enterdb:read("gb_dyno_topo_ix", [{"ix", 1}]) of
-	{ok, _Hash} ->
-	    ok;
+	{ok, Hash} ->
+	    {ok, Hash};
 	{error,"no_table"} ->
 	    create_metadata(Opts);
 	{error, "table_closed"} ->
@@ -64,7 +64,7 @@ init(Opts) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec create_metadata(Options :: proplist()) ->
-    ok.
+    {ok , Hash :: integer()}.
 create_metadata(Options) ->
     Cluster = proplists:get_value(cluster, Options), 
     DC = proplists:get_value(dc, Options), 
@@ -74,8 +74,6 @@ create_metadata(Options) ->
     NodeData = [{node(), Data}],
     Metadata = [{cluster, Cluster}, {nodes, NodeData}],
 
-    Hash = gb_hash:hash(?ALG, Metadata),
-    
     {error,"no_table"} = enterdb:table_info("gb_dyno_metadata", [name]),
     TabOpts = [{type, leveldb},
 	       {data_model, binary},
@@ -87,11 +85,7 @@ create_metadata(Options) ->
 			      ["ix"], ["hash"], [], TabOpts),
     ok = enterdb:create_table("gb_dyno_metadata",
 			      ["tag", "hash"], ["data"], [], TabOpts),
-    ok = enterdb:write("gb_dyno_topo_ix",
-		       [{"ix", 1}], [{"hash", Hash}]),
-    ok = enterdb:write("gb_dyno_metadata",
-		       [{"tag", "topo"}, {"hash", Hash}],
-		       [{"data", Metadata}]).
+    commit_topo(Metadata, 1).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -99,30 +93,43 @@ create_metadata(Options) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec open_tables() ->
-    ok.
+    {ok , Hash :: integer()}.
 open_tables() ->
     ok = enterdb:open_table("gb_dyno_topo_ix"),
     ok = enterdb:open_table("gb_dyno_metadata"),
-    {ok, _} = enterdb:read("gb_dyno_topo_ix", [{"ix", 1}]),
-    ok.
+    {ok, {_, [{"hash", Hash}]}, _} = enterdb:first("gb_dyno_topo_ix"),
+    {ok, Hash}.
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Store new metadata with topo(topology) tag. The stored data
+%% Commit new metadata with topo(topology) tag. The committed data
 %% represents the dyno topology from a local point of view.
 %% @end
 %%--------------------------------------------------------------------
--spec store_topo(Metadata :: proplist()) ->
-    ok | {error, Reason :: term()}.
-store_topo(Metadata) ->
+-spec commit_topo(Metadata :: proplist()) ->
+    {ok, Hash :: integer()}.
+commit_topo(Metadata) ->
     {ok, {[{"ix", Ix}], _}, _} = enterdb:first("gb_dyno_topo_ix"),
+    commit_topo(Metadata, Ix+1).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Commit new metadata with topo(topology) tag and given index.
+%% The committed data represents the dyno topology from a local
+%% point of view.
+%% @end
+%%--------------------------------------------------------------------
+-spec commit_topo(Metadata :: proplist(),
+		  Ix :: pos_integer()) ->
+    {ok, Hash :: integer()}.
+commit_topo(Metadata, Ix) ->
     Hash = gb_hash:hash(?ALG, Metadata),
     ok = enterdb:write("gb_dyno_topo_ix",
-		       [{"ix", Ix + 1}], [{"hash", Hash}]),
+		       [{"ix", Ix}], [{"hash", Hash}]),
     ok = enterdb:write("gb_dyno_metadata",
 		       [{"tag", "topo"}, {"hash", Hash}],
-		       [{"data", Metadata}]).
+		       [{"data", Metadata}]),
+    {ok, Hash}.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -395,4 +402,4 @@ node_update({Prop, Value}) ->
     NewNodes = [{N, D4} | proplists:delete(N, Nodes)],
     SortedNodes = lists:sort(fun compare_nodes/2, NewNodes), 
     NewMetadata = [{cluster, Cluster}, {nodes, SortedNodes}],
-    store_topo(NewMetadata).
+    commit_topo(NewMetadata).
