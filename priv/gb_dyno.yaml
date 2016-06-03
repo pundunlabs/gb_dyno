@@ -1,6 +1,8 @@
 # GB_DYNO Application configuration file
 ---
 app_name : gb_dyno
+notify_cb: [gb_dyno_sup, notify]
+verify_cb: [gb_dyno_sup, verify]
 params   :
     reachability_check_interval : 60000
     # @cluster: Name of the cluster that this node belongs to.

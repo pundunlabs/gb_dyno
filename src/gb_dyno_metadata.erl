@@ -79,7 +79,8 @@ create_metadata(Options) ->
 	       {data_model, binary},
 	       {comparator, descending},
 	       {time_series, false},
-	       {shards, 1}],
+	       {shards, 1},
+	       {distributed, false}],
 
     ok = enterdb:create_table("gb_dyno_topo_ix",
 			      ["ix"], ["hash"], [], TabOpts),

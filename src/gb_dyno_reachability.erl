@@ -147,10 +147,14 @@ reachability_check() ->
 %% @end
 %%--------------------------------------------------------------------
 init(Options) ->
+    ?debug("Starting ~p server. Options: ~p", [?MODULE, Options]),
     CheckInterval = proplists:get_value(reachability_check_interval, Options,
 					?DEFAULT_REACHABILITY_CHECK_INTERVAL), 
-    {ok, TRef} = timer:apply_after(CheckInterval, ?MODULE, reachability_check, []),
     
+    {ok, Metadata} = gb_dyno_metadata:lookup_topo(),
+    ?debug("~p, Metadata: ~p", [?MODULE, Metadata]),
+    Nodes = construct_node_info(Metadata),
+    ?debug("~p, Nodes: ~p", [?MODULE, Nodes]),
     ets:new(node_tab, [named_table,
 		       protected,
 		       {keypos, #node.name},
@@ -163,12 +167,13 @@ init(Options) ->
 		       protected,
 		       {keypos, #rack.name},
 		       {read_concurrency, true}]),
-    {ok, Metadata} = gb_dyno_metadata:lookup_topo(),
-    Nodes = construct_node_info(Metadata),
+    ?debug("~p,  ets:new ok", [?MODULE]),
     ets:insert(node_tab, Nodes),
     {DCs, Racks} = construct_dc_rack_info(Nodes),
+    ?debug("~p,  DCs: ~p, Racks: ~p", [?MODULE, DCs, Racks]),
     ets:insert(dc_tab, DCs),
     ets:insert(rack_tab, Racks),
+    {ok, TRef} = timer:apply_after(CheckInterval, ?MODULE, reachability_check, []),
     {ok, #state{check_interval = CheckInterval,
 		check_tref = TRef}}.
 
@@ -277,7 +282,7 @@ code_change(_OldVsn, State, _Extra) ->
 construct_node_info(Metadata) ->
     NodesData = proplists:get_value(nodes, Metadata),
     [begin
-	Removed = proplists:get_value(removed, NodesData, false),
+	Removed = proplists:get_value(removed, Data, false),
 	Ts = os:timestamp(),
 	{Reachable, UTs} = check_reachability(Removed, Name, Ts),
 	#node{name = Name,
