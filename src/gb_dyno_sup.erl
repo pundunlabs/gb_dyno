@@ -36,6 +36,8 @@
 %% Helper macro for declaring children of supervisor
 -define(WORKER(I, A), {I, {I, start_link, A}, permanent, 5000, worker, [I]}).
 
+-define(DEFAULT_REACHABILITY_CHECK_INTERVAL, 60000).
+
 %% ===================================================================
 %% API functions
 %% ===================================================================
@@ -81,7 +83,8 @@ init([]) ->
 -spec get_gb_dyno_options() ->
     Options :: [{atom(), term()}].
 get_gb_dyno_options() ->
-    RC_Int = gb_conf:get_param("gb_dyno.yaml", reachability_check_interval),
+    RC_Int = gb_conf:get_param("gb_dyno.yaml", reachability_check_interval,
+				?DEFAULT_REACHABILITY_CHECK_INTERVAL),
     Cluster = gb_conf:get_param("gb_dyno.yaml", cluster),
     DC = gb_conf:get_param("gb_dyno.yaml", dc),
     Rack = gb_conf:get_param("gb_dyno.yaml", rack),

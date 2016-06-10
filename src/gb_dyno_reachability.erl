@@ -66,8 +66,6 @@
 	       num_of_nodes :: integer(),
 	       num_of_reachable_nodes :: integer()}).
 
--define(DEFAULT_REACHABILITY_CHECK_INTERVAL, 60000).
-
 %%%===================================================================
 %%% API functions
 %%%===================================================================
@@ -148,8 +146,7 @@ reachability_check() ->
 %%--------------------------------------------------------------------
 init(Options) ->
     ?debug("Starting ~p server. Options: ~p", [?MODULE, Options]),
-    CheckInterval = proplists:get_value(reachability_check_interval, Options,
-					?DEFAULT_REACHABILITY_CHECK_INTERVAL), 
+    CheckInterval = proplists:get_value(reachability_check_interval, Options),
     
     {ok, Metadata} = gb_dyno_metadata:lookup_topo(),
     ?debug("~p, Metadata: ~p", [?MODULE, Metadata]),
@@ -260,7 +257,8 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _State) ->
+terminate(_Reason, #state{check_tref = Tref}) ->
+    timer:cancel(Tref),
     ok.
 
 %%--------------------------------------------------------------------
