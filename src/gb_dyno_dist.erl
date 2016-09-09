@@ -271,8 +271,10 @@ get_result(Mref, CReq, Results) ->
 		{nok, NewResults} ->
 		    get_result(Mref, CReq, NewResults);  
 		{ok, Response} ->
+		    erlang:demonitor(Mref, [flush]),
 		    Response;
 		{error, Reason} ->
+		    erlang:demonitor(Mref, [flush]),
 		    {error, Reason}
 	    end;
 	{'DOWN',Mref,_,_,Reason} ->
