@@ -44,7 +44,7 @@
 	       local_dc,
 	       num_of_dc}).
 
--include("gb_log.hrl").
+-include_lib("gb_log/include/gb_log.hrl").
 
 %%--------------------------------------------------------------------
 %% @doc

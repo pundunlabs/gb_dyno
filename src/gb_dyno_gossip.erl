@@ -41,7 +41,7 @@
 		dc,
 		rack}).
 
--include("gb_log.hrl").
+-include_lib("gb_log/include/gb_log.hrl").
 -define(TIMEOUT, 5000).
 
 %%%===================================================================

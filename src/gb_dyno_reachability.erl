@@ -40,7 +40,7 @@
          terminate/2,
          code_change/3]).
 
--include("gb_log.hrl").
+-include_lib("gb_log/include/gb_log.hrl").
 
 -record(state, {check_interval,
 		check_tref}).
