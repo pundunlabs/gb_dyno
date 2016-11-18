@@ -76,16 +76,16 @@ create_metadata(Options) ->
 
     {error,"no_table"} = enterdb:table_info("gb_dyno_metadata", [name]),
     TabOpts = [{type, leveldb},
-	       {data_model, binary},
+	       {data_model, map},
 	       {comparator, descending},
 	       {time_series, false},
 	       {shards, 1},
 	       {distributed, false}],
 
     ok = enterdb:create_table("gb_dyno_topo_ix",
-			      ["ix"], ["hash"], [], TabOpts),
+			      ["ix"], TabOpts),
     ok = enterdb:create_table("gb_dyno_metadata",
-			      ["tag", "hash"], ["data"], [], TabOpts),
+			      ["tag", "hash"], [], TabOpts),
     commit_topo(Metadata, 1).
 
 %%--------------------------------------------------------------------
