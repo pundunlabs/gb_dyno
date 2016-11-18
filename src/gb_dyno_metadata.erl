@@ -85,7 +85,7 @@ create_metadata(Options) ->
     ok = enterdb:create_table("gb_dyno_topo_ix",
 			      ["ix"], TabOpts),
     ok = enterdb:create_table("gb_dyno_metadata",
-			      ["tag", "hash"], [], TabOpts),
+			      ["tag", "hash"], TabOpts),
     commit_topo(Metadata, 1).
 
 %%--------------------------------------------------------------------
