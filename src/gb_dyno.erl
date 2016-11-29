@@ -22,28 +22,27 @@
 
 -module(gb_dyno).
 
--behaviour(gen_server).
-
 %% API functions
--export([start_link/1,
+-export([init/0,
+	 update_configuration/0,
+	 read_configuration/0,
 	 conf/1,
 	 conf/2]).
 
-%% gen_server callbacks
--export([init/1,
-         handle_call/3,
-         handle_cast/2,
-         handle_info/2,
-         terminate/2,
-         code_change/3]).
-
--record(state, {}).
-
 -include_lib("gb_log/include/gb_log.hrl").
+
+-define(REGISTER, '$gb_dyno_conf').
+-define(DEFAULT_REACHABILITY_CHECK_INTERVAL, 60000).
 
 %%%===================================================================
 %%% API functions
 %%%===================================================================
+-spec update_configuration() ->
+    ok | {error, Reason :: term()}.
+update_configuration() ->
+    Tuples = read_configuration(),
+    gb_reg:insert(?REGISTER, Tuples).
+
 -spec conf(Key :: term()) ->
     Value :: term() | undefined.
 conf(Key) ->
@@ -52,115 +51,38 @@ conf(Key) ->
 -spec conf(Key :: term(), Default :: term()) ->
     Value :: term().
 conf(Key, Default) ->
-    case (catch ets:lookup(gb_dyno_conf, Key)) of
-	[{_, Value}] -> Value;
-	[] -> Default;
-	{'EXIT', Error} ->
-	    ?debug("ETS table not created yet, error: ~p", [Error]),
-	    gb_conf:get_param("gb_dyno.yaml", Key, Default)
+    case gb_reg:lookup(?REGISTER, Key) of
+	undefined -> Default;
+	Val -> Val
     end.
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
-%% @end
-%%--------------------------------------------------------------------
-start_link(Options) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, Options, []).
-%%%===================================================================
-%%% gen_server callbacks
-%%%===================================================================
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Initializes the server
-%%
-%% @spec init(Args) -> {ok, State} |
-%%                     {ok, State, Timeout} |
-%%                     ignore |
-%%                     {stop, Reason}
-%% @end
-%%--------------------------------------------------------------------
-init(Options) ->
-    ?debug("Starting gb_dyno gen_server. init(~p)", [Options]),
-    ets:new(gb_dyno_conf, [named_table,
-			   protected,
-		           {keypos, 1},
-			   {read_concurrency, true}]),
-    ets:insert(gb_dyno_conf, [{K,V} || {K,V} <- Options]),
-    {ok, #state{}}.
+-spec init() ->
+    ok | {error, Reason :: term()}.
+init() ->
+    Tuples = read_configuration(),
+    case gb_reg:new("gb_dyno_conf", Tuples) of
+	{ok, _Module} ->
+	    ok;
+	{error, {already_exists, Module}} ->
+	    gb_reg:insert(Module, Tuples);
+	{error, Reason} ->
+	    {error, Reason}
+    end.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling call messages
-%%
-%% @spec handle_call(Request, From, State) ->
-%%                                   {reply, Reply, State} |
-%%                                   {reply, Reply, State, Timeout} |
-%%                                   {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, Reply, State} |
-%%                                   {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
+-spec read_configuration() ->
+    Options :: [{atom(), term()}].
+read_configuration() ->
+    RC_Int = gb_conf:get_param("gb_dyno.yaml", reachability_check_interval,
+				?DEFAULT_REACHABILITY_CHECK_INTERVAL),
+    Cluster = gb_conf:get_param("gb_dyno.yaml", cluster),
+    DC = gb_conf:get_param("gb_dyno.yaml", dc),
+    Rack = gb_conf:get_param("gb_dyno.yaml", rack),
+    RequestTimeout = gb_conf:get_param("gb_dyno.yaml", request_timeout),
+    WriteConsistency = gb_conf:get_param("gb_dyno.yaml", write_consistency),
+    ReadConsistency = gb_conf:get_param("gb_dyno.yaml", read_consistency),
+    [{reachability_check_interval, RC_Int},
+     {cluster, Cluster}, {dc, DC}, {rack, Rack},
+     {write_consistency, list_to_atom(WriteConsistency)},
+     {read_consistency, list_to_atom(ReadConsistency)},
+     {request_timeout, RequestTimeout}].
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling cast messages
-%%
-%% @spec handle_cast(Msg, State) -> {noreply, State} |
-%%                                  {noreply, State, Timeout} |
-%%                                  {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
-handle_cast(_Msg, State) ->
-    {noreply, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling all non call/cast messages
-%%
-%% @spec handle_info(Info, State) -> {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
-handle_info(_Info, State) ->
-    {noreply, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called by a gen_server when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_server terminates
-%% with Reason. The return value is ignored.
-%%
-%% @spec terminate(Reason, State) -> void()
-%% @end
-%%--------------------------------------------------------------------
-terminate(_Reason, _State) ->
-    ok.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Convert process state when code is changed
-%%
-%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
-%% @end
-%%--------------------------------------------------------------------
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
-
-%%%===================================================================
-%%% Internal functions
-%%%===================================================================

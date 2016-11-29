@@ -6,8 +6,17 @@ verify_cb: [gb_dyno_sup, verify]
 params   :
     reachability_check_interval : 60000
     # @cluster: Name of the cluster that this node belongs to.
-    cluster	: "cl01"
+    cluster		: "cl01"
     # @dc: Data center name that this node belongs to.
-    dc		: "dc01"
+    dc			: "dc01"
     # @rack: Rack name that this node belongs to.
-    rack	: "rack01"
+    rack		: "rack01"
+    # @timeout: duration in milliseconds to wait until responses
+    request_timeout		: 5000
+    #Consistency levels
+    # ALL | EACH_QUORUM | QUORUM | LOCAL_QUORUM | ONE |
+    # TWO | THREE | LOCAL_ONE | ANY
+    # Consistency level for write mode operations.
+    write_consistency	: ANY
+    # Consistency level for write mode operations.
+    read_consistency	: ONE

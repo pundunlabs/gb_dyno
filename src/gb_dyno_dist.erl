@@ -77,12 +77,12 @@ call(Ring, Req, Mode) when Mode == write; Mode == read ->
     Consistency =
 	case Mode of
 	    write ->
-		conf(write_consistency);
+		gb_dyno:conf(write_consistency);
 	    read ->
-		conf(read_consistency)
+		gb_dyno:conf(read_consistency)
 	end,
-    DC = conf(dc),
-    Timeout = conf(timeout),
+    DC = gb_dyno:conf(dc),
+    Timeout = gb_dyno:conf(request_timeout),
     pdist(Consistency, DC, Ring, Req, Timeout).
 
 %%--------------------------------------------------------------------
@@ -96,8 +96,8 @@ call(Ring, Req, Mode) when Mode == write; Mode == read ->
     {ok, Response :: term()} | {error, Reason :: term()}.
 call_seq(Ring, Req) ->
     ?debug("Call sequential for: : ~p", [Ring]),
-    DC = conf(dc),
-    Timeout = conf(timeout),
+    DC = gb_dyno:conf(dc),
+    Timeout = gb_dyno:conf(request_timeout),
     sdist(DC, Ring, Req, Timeout).
 
 %%--------------------------------------------------------------------
@@ -641,28 +641,3 @@ do_yield(Pid, Timeout) ->
         after Timeout ->
             timeout
     end.
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Mock function for fast configuration access.
-%% Returns a configuration param.
-%% @end
-%%--------------------------------------------------------------------
--spec conf(Attr :: string()) ->
-    Param :: term().
-conf(timeout) ->
-    5000;
-conf(write_consistency) ->
-    %% "ALL" | "EACH_QUORUM" | "QUORUM" | "LOCAL_QUORUM" | "ONE" |
-    %% "TWO" | "THREE" | "LOCAL_ONE" | "ANY" |
-    'ANY';
-conf(read_consistency) ->
-    %% 'ALL' | 'EACH_QUORUM' | 'QUORUM' | 'LOCAL_QUORUM' | 'ONE' |
-    %% 'TWO' | 'THREE' | 'LOCAL_ONE' 
-    'ONE';
-conf(dc) ->
-    "dc01";
-conf(rack) ->
-    "rack01";
-conf(_Attr) ->
-    undefined.

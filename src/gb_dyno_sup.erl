@@ -36,20 +36,19 @@
 %% Helper macro for declaring children of supervisor
 -define(WORKER(I, A), {I, {I, start_link, A}, permanent, 5000, worker, [I]}).
 
--define(DEFAULT_REACHABILITY_CHECK_INTERVAL, 60000).
-
 %% ===================================================================
 %% API functions
 %% ===================================================================
 
 start_link() ->
+    ok = gb_dyno:init(),
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 -spec notify() ->
     ok | {error, Reason::term()}.
 notify()->
     ?debug("Configuration change, notify called..", []),
-    ok.
+    gb_dyno:update_configuration().
 
 -spec verify() ->
     ok | {error, Reason::term()}.
@@ -67,30 +66,18 @@ init([]) ->
     MaxSecondsBetweenRestarts = 3600,
     SupFlags = {RestartStrategy, MaxRestarts, MaxSecondsBetweenRestarts},
  
-    GB_Dyno_Opts = get_gb_dyno_options(),
+    GB_Dyno_Opts = gb_dyno:read_configuration(),
     {ok, Hash} = init_metadata(GB_Dyno_Opts),
 
     Gossip_Opts = [{hash, Hash} | GB_Dyno_Opts],
-    GB_Dyno = ?WORKER(gb_dyno, [Gossip_Opts]),
     GB_Dyno_Gossip = ?WORKER(gb_dyno_gossip, [Gossip_Opts]),
     GB_Dyno_Reachability = ?WORKER(gb_dyno_reachability, [GB_Dyno_Opts]),
 
-    {ok, { SupFlags, [GB_Dyno, GB_Dyno_Reachability, GB_Dyno_Gossip]} }.
+    {ok, { SupFlags, [GB_Dyno_Reachability, GB_Dyno_Gossip]} }.
 
 %% ===================================================================
 %% Internal Functions
 %% ===================================================================
--spec get_gb_dyno_options() ->
-    Options :: [{atom(), term()}].
-get_gb_dyno_options() ->
-    RC_Int = gb_conf:get_param("gb_dyno.yaml", reachability_check_interval,
-				?DEFAULT_REACHABILITY_CHECK_INTERVAL),
-    Cluster = gb_conf:get_param("gb_dyno.yaml", cluster),
-    DC = gb_conf:get_param("gb_dyno.yaml", dc),
-    Rack = gb_conf:get_param("gb_dyno.yaml", rack),
-    [{reachability_check_interval, RC_Int},
-     {cluster, Cluster}, {dc, DC}, {rack, Rack}].
-
 -spec init_metadata(Opts :: [{atom(), term()}]) ->
     ok.
 init_metadata(Opts) ->
