@@ -371,7 +371,7 @@ handle_multi_call_result(Replies, Badnodes) ->
 					 unreachable_ts = undefined}),
 		notify_reachability(Node);
 	    [#node{} = Rec] ->
-		update_node(no_shange, Rec#node{last_try = Ts})
+		update_node(no_change, Rec#node{last_try = Ts})
 	end
      end || {Node, _Reply} <- Replies],
     [begin
