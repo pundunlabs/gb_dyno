@@ -49,8 +49,9 @@
 -spec init(Opts :: proplist()) ->
     {ok, Hash :: integer()}.
 init(Opts) ->
-    case enterdb:read("gb_dyno_topo_ix", [{"ix", 1}]) of
-	{ok, Hash} ->
+    case enterdb:read("gb_dyno_metadata", [{"tag","hash"},{"hash","current"}]) of
+	{ok, Value} ->
+	    {_, Hash} = lists:keyfind("data", 1, Value),
 	    {ok, Hash};
 	{error,"no_table"} ->
 	    create_metadata(Opts);
@@ -98,7 +99,8 @@ create_metadata(Options) ->
 open_tables() ->
     ok = enterdb:open_table("gb_dyno_topo_ix"),
     ok = enterdb:open_table("gb_dyno_metadata"),
-    {ok, {_, [{"hash", Hash}]}, _} = enterdb:first("gb_dyno_topo_ix"),
+    {ok, {_, Value}, _} = enterdb:first("gb_dyno_topo_ix"),
+    {_, Hash} = lists:keyfind("hash", 1, Value),
     {ok, Hash}.
 
 %%--------------------------------------------------------------------
@@ -130,6 +132,9 @@ commit_topo(Metadata, Ix) ->
     ok = enterdb:write("gb_dyno_metadata",
 		       [{"tag", "topo"}, {"hash", Hash}],
 		       [{"data", Metadata}]),
+    ok = enterdb:write("gb_dyno_metadata",
+		       [{"tag", "hash"}, {"hash", "current"}],
+		       [{"data", Hash}]),
     {ok, Hash}.
 
 %%--------------------------------------------------------------------
@@ -140,7 +145,8 @@ commit_topo(Metadata, Ix) ->
 -spec lookup_topo() ->
     {ok, Metadata :: proplist()} | {error, Reason :: term()}.
 lookup_topo() ->
-    {ok,{_, [{"hash", Hash}]}, _} = enterdb:first("gb_dyno_topo_ix"),
+    {ok, Value} = enterdb:read("gb_dyno_metadata", [{"tag", "hash"}, {"hash","current"}]),
+    {_, Hash} = lists:keyfind("data", 1, Value),
     lookup_topo(Hash).
 
 %%--------------------------------------------------------------------

@@ -66,12 +66,12 @@ init([]) ->
     MaxSecondsBetweenRestarts = 3600,
     SupFlags = {RestartStrategy, MaxRestarts, MaxSecondsBetweenRestarts},
  
-    GB_Dyno_Opts = gb_dyno:read_configuration(),
-    {ok, Hash} = init_metadata(GB_Dyno_Opts),
+    Opts = gb_dyno:read_configuration(),
+    {ok, Hash} = init_metadata(Opts),
 
-    Gossip_Opts = [{hash, Hash} | GB_Dyno_Opts],
+    Gossip_Opts = [{hash, Hash} | Opts],
     GB_Dyno_Gossip = ?WORKER(gb_dyno_gossip, [Gossip_Opts]),
-    GB_Dyno_Reachability = ?WORKER(gb_dyno_reachability, [GB_Dyno_Opts]),
+    GB_Dyno_Reachability = ?WORKER(gb_dyno_reachability, [Gossip_Opts]),
 
     {ok, { SupFlags, [GB_Dyno_Reachability, GB_Dyno_Gossip]} }.
 

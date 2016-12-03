@@ -19,7 +19,6 @@
 %% @end
 %%%===================================================================
 
-
 -module(gb_dyno_reachability).
 
 -behaviour(gen_server).
@@ -147,8 +146,8 @@ reachability_check() ->
 init(Options) ->
     ?debug("Starting ~p server. Options: ~p", [?MODULE, Options]),
     CheckInterval = proplists:get_value(reachability_check_interval, Options),
-    
-    {ok, Metadata} = gb_dyno_metadata:lookup_topo(),
+    Hash = proplists:get_value(hash, Options),
+    {ok, Metadata} = gb_dyno_metadata:lookup_topo(Hash),
     ?debug("~p, Metadata: ~p", [?MODULE, Metadata]),
     Nodes = construct_node_info(Metadata),
     ?debug("~p, Nodes: ~p", [?MODULE, Nodes]),

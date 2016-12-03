@@ -71,6 +71,7 @@ pull(RemoteNode) ->
 	{error, Reason} ->
 	    {error, Reason}
     end.
+
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
