@@ -571,12 +571,14 @@ revert_call(_Nodes, undefined, _Timeout, {ResL, []}) ->
 revert_call(_Nodes, undefined, _Timeout, {_ResL, BadNodes}) ->
     {error, {bad_nodes, BadNodes}};
 revert_call(Nodes, {M, F, A}, Timeout, {ResL, []}) ->
+    ?debug("ResL: ~p",[ResL]),
     case check_response(ResL) of
-	{error, ResL} ->
+	{Bad, Res} when Bad == error; Bad == badrpc ->
 	    {RevResL, RevBadNodes} = rpc:multicall(Nodes, M, F, A, Timeout),
 	    ?debug("Revert result: ~p",[{RevResL, RevBadNodes}]),
-	    {error, ResL};
+	    {Bad, Res};
 	Res ->
+	    ?debug("Res: ~p",[Res]),
 	    Res
     end;
 revert_call(Nodes, {M, F, A}, Timeout, {_ResL, BadNodes}) ->
