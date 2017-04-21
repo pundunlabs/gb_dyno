@@ -80,7 +80,7 @@ create_metadata(Options) ->
 	       {data_model, map},
 	       {comparator, descending},
 	       {time_series, false},
-	       {shards, 1},
+	       {num_of_shards, 1},
 	       {distributed, false}],
 
     ok = enterdb:create_table("gb_dyno_topo_ix",
