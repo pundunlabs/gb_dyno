@@ -73,7 +73,7 @@ topo_call({Module, Function, Args}, Options) ->
 	   Req :: {module(), function(), args()},
 	   Mode :: write | read ) ->
     {ok, Response :: term()} | {error, Reason :: term()}.
-call(Ring, Req, Mode) when Mode == write; Mode == read ->
+call(Nodes, Req, Mode) when Mode == write; Mode == read ->
     Consistency =
 	case Mode of
 	    write ->
@@ -83,7 +83,7 @@ call(Ring, Req, Mode) when Mode == write; Mode == read ->
 	end,
     DC = gb_dyno:conf(dc),
     Timeout = gb_dyno:conf(request_timeout),
-    pdist(Consistency, DC, Ring, Req, Timeout).
+    spawn_do(fun pdist/5, [Consistency, DC, Nodes, Req, Timeout]).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -98,7 +98,7 @@ call_seq(Ring, Req) ->
     ?debug("Call sequential for: : ~p", [Ring]),
     DC = gb_dyno:conf(dc),
     Timeout = gb_dyno:conf(request_timeout),
-    sdist(DC, Ring, Req, Timeout).
+    spawn_do(fun sdist/4, [DC, Ring, Req, Timeout]).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -113,7 +113,7 @@ call_seq(Ring, Req) ->
     {ok, ResL :: [term()]} | {error, Reason :: term()}.
 call_shards(Shards, Req, Mode) when Mode == write; Mode == read ->
     Reqs = [{?MODULE, call, [Ring, Req, Mode]} || {_, Ring} <- Shards],
-    peval(Reqs).
+    spawn_do(fun peval/1, [Reqs]).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -130,7 +130,7 @@ call_shards(Shards, Req, Mode) when Mode == write; Mode == read ->
 map_shards({Mod, Fun, Args}, Mode, Shards) when Mode == write; Mode == read ->
     Reqs = [{?MODULE, call, [Ring, {Mod, Fun, [Shard | Args]}, Mode]}
 	    || {Shard, Ring} <- Shards],
-    peval(Reqs).
+    spawn_do(fun peval/1, [Reqs]).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -144,7 +144,7 @@ map_shards({Mod, Fun, Args}, Mode, Shards) when Mode == write; Mode == read ->
     {ok, ResL :: [term()]} | {error, Reason :: term()}.
 call_shards_seq(Shards, Req) ->
     Reqs = [{?MODULE, call_seq, [Ring, Req]} || {_, Ring} <- Shards],
-    peval(Reqs).
+    spawn_do(fun peval/1, [Reqs]).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -161,7 +161,7 @@ map_shards_seq({Mod, Fun, Args}, Shards) ->
     Reqs = [{?MODULE, call_seq, [Ring, {Mod, Fun, [Shard | Args]}]}
 	    || {Shard, Ring} <- Shards],
     ?debug("Reqs: ~p",[Reqs]),
-    peval(Reqs).
+    spawn_do(fun peval/1, [Reqs]).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -211,7 +211,6 @@ pdist(Consistency, DC, Ring, BaseReq, Timeout) ->
 	    {[{N, Req, RDC} | Acc], [{RDC,L} | NPDC], TN+L}
 	end,
     {Reqs, NodesPerDC, TotalNodes} = maps:fold(Fold, {[], [], 0}, Ring),
-    Tag = make_ref(),
     Caller = self(),
     EachQuorum =  [{RDC, {L div 2 + 1, L}} || {RDC, L} <- NodesPerDC],
     Quorum = TotalNodes div 2 + 1,
@@ -221,8 +220,7 @@ pdist(Consistency, DC, Ring, BaseReq, Timeout) ->
 		 each_quorum = maps:from_list(EachQuorum),
 		 local_dc = DC,
 		 num_of_dc = length(EachQuorum)},
-    {Receiver, Mref} = spawn_monitor(fun()-> receiver(Reqs, Timeout, {Caller,Tag}) end),
-    Receiver ! {Caller, Tag},
+    {_, Mref} = spawn_monitor(fun()-> receiver(Reqs, Timeout, Caller) end),
     get_result(Mref, CReq, #{}).
 
 -spec sdist(DC :: string(),
@@ -284,23 +282,16 @@ get_result(Mref, CReq, Results) ->
 	    {error, maps:get(error, Results, Reason)}
     end.
 
-receiver(Reqs, Timeout, {Caller, Tag}) ->
+receiver(Reqs, Timeout, Caller) ->
     process_flag(trap_exit, true),
     Cref = erlang:monitor(process, Caller),
-    receive
-	{Caller,Tag} ->
-	    Monitors = multi_call(Reqs, Timeout, self(), #{}),
-	    TimerRef = erlang:start_timer(Timeout, self(), ok),
-	    {Reason, Results} = receiver_loop(Cref, Caller, Monitors, []),
-	    cancel_timer(Reason, TimerRef),
-	    %% Process results.
-	    handle_results(Results),
-	    exit(Reason);
-	{'DOWN',Cref,_,_,_} ->
-	    %% Caller down before sending any requests.
-	    %% Exit.
-	    exit(normal)
-    end.
+    Monitors = multi_call(Reqs, Timeout, self(), #{}),
+    TimerRef = erlang:start_timer(Timeout, self(), ok),
+    {Reason, Results} = receiver_loop(Cref, Caller, Monitors, []),
+    cancel_timer(Reason, TimerRef),
+    %% Process results.
+    handle_results(Results),
+    exit(Reason).
 
 -spec receiver_loop(Cref :: reference(), Caller :: pid(),
 		    Monitors :: map(), Results :: [{node(), term()}]) ->
@@ -642,4 +633,21 @@ do_yield(Pid, Timeout) ->
             {value, R}
         after Timeout ->
             timeout
+    end.
+
+-spec spawn_do(F :: fun(), A :: term()) -> undefined.
+spawn_do(F,A) ->
+    Caller = self(),
+    Mref   = make_ref(),
+    AF = fun() ->
+	    Res = (catch apply(F, A)),
+	    Caller ! {Mref, Res}
+	end,
+    {_Pid, Mon} = spawn_monitor(AF),
+    receive
+	{Mref, Res} ->
+	    erlang:demonitor(Mon, [flush]),
+	    Res;
+	{'DOWN', Mon, _, _, Reason} ->
+	    {error, Reason}
     end.
