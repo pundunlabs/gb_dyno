@@ -112,8 +112,9 @@ open_tables() ->
 -spec commit_topo(Metadata :: proplist()) ->
     {ok, Hash :: integer()}.
 commit_topo(Metadata) ->
-    {ok, {[{"ix", Ix}], _}, _} = enterdb:first("gb_dyno_topo_ix"),
-    commit_topo(Metadata, Ix+1).
+    {ok, {[{"ix", Ix}], [{"hash",OldHash}]}, _} = enterdb:first("gb_dyno_topo_ix"),
+    NewHash = gb_hash:hash(?ALG, Metadata),
+    commit_topo(Metadata, Ix+1, NewHash, OldHash).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -127,6 +128,17 @@ commit_topo(Metadata) ->
     {ok, Hash :: integer()}.
 commit_topo(Metadata, Ix) ->
     Hash = gb_hash:hash(?ALG, Metadata),
+    commit_topo(Metadata, Ix, Hash, undefined).
+
+-spec commit_topo(Metadata :: proplist(),
+		  Ix :: pos_integer(),
+		  Hash :: integer(),
+		  OldHash :: integer()) ->
+    {ok, Hash :: integer()}.
+%% don't store if we have the same hash
+commit_topo(_Metadata, _Ix, Hash, OldHash) when Hash =:= OldHash ->
+    {ok, Hash};
+commit_topo(Metadata, Ix, Hash, _OldHash) ->
     ok = enterdb:write("gb_dyno_topo_ix",
 		       [{"ix", Ix}], [{"hash", Hash}]),
     ok = enterdb:write("gb_dyno_metadata",
