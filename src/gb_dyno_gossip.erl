@@ -36,11 +36,6 @@
          terminate/2,
          code_change/3]).
 
--record(state, {hash,
-		cluster,
-		dc,
-		rack}).
-
 -include_lib("gb_log/include/gb_log.hrl").
 -define(TIMEOUT, 5000).
 
@@ -85,13 +80,18 @@ pull(RemoteNode) ->
 %%--------------------------------------------------------------------
 init(Options) ->
     Hash = proplists:get_value(hash, Options),
-    Cluster = proplists:get_value(cluster, Options), 
-    DC = proplists:get_value(dc, Options), 
+    Cluster = proplists:get_value(cluster, Options),
+    DC = proplists:get_value(dc, Options),
     Rack = proplists:get_value(rack, Options),
-    {ok, #state{hash = Hash,
-		cluster = Cluster,
-		dc = DC,
-		rack = Rack}}.
+    proc_lib:spawn_link(gb_dyno_gossip_sync, start, [self()]),
+
+    %% Be sure that sync is done before we return
+    gb_dyno_gossip_sync:do_sync(),
+
+    {ok, #{hash => Hash,
+	   cluster => Cluster,
+	   dc => DC,
+	   rack => Rack}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -107,13 +107,13 @@ init(Options) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({pull_request, Hash, _}, _From, State = #state{hash = Hash}) ->
-    ?debug("pull_request for same hash: ~p", [Hash]),
+handle_call({pull_request, Hash, _}, _From, State = #{hash := Hash}) ->
     {reply, ok, State};
 handle_call({pull_request, _, RemoteNode}, _From, State) ->
     ?debug("pull_request from ~p", [RemoteNode]),
     erlang:spawn(?MODULE, pull, [RemoteNode]),
     {reply, ok, State};
+
 handle_call(Request, _From, State) ->
     Reply = ?warning("Unhandled call request: ~p", [Request]),
     {reply, Reply, State}.
@@ -128,8 +128,7 @@ handle_call(Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({commit, Hash, _}, State = #state{hash = Hash}) ->
-    ?debug("commit notification for same hash: ~p", [Hash]),
+handle_cast({commit, Hash, _}, State = #{hash := Hash}) ->
     {noreply, State};
 handle_cast({commit, Hash, Metadata}, State) ->
     ?debug("commit notification", []),
@@ -139,7 +138,7 @@ handle_cast({commit, Hash, Metadata}, State) ->
     {Replies, BadNodes} =
 	gen_server:multi_call(Nodes, ?MODULE, {pull_request, Hash, node()}, ?TIMEOUT),
     gb_dyno_reachability:multi_call_result(Replies, BadNodes),
-    {noreply, State#state{hash = Hash}};
+    {noreply, State#{hash => Hash}};
 handle_cast(Msg, State) ->
     ?warning("Unhandled cast message: ~p", [Msg]),
     {noreply, State}.

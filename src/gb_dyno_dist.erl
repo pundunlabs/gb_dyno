@@ -366,12 +366,18 @@ multi_call([], _, _Collector, Acc) ->
 		  Req :: {module(), function(), args()},
 		  Timeout :: timeout(),
 		  Collector :: pid()) ->
-    ok.
+    {error, Reason :: term()} | {ok, Result :: term()}.
 single_call(Node, DC, {Mod, Fun, Args}, Timeout, Collector) ->
     Response =
 	case rpc:call(Node, Mod, Fun, Args, Timeout) of
 	    {badrpc, _} = R->
+		%% Args is the enterdb call, removing the gb_dyno_dist wrapper
+		enterdb_recovery:log_event(Node, hd(Args)),
 		{error, R};
+	    {error, not_ready} ->
+		%% Args is the enterdb call, removing the gb_dyno_dist wrapper
+		enterdb_recovery:log_event(Node, hd(Args)),
+		{error, not_ready};
 	    R ->
 		{ok, R}
 	end,

@@ -29,8 +29,11 @@
 	 lookup_topo/1,
 	 fetch_topo_history/0,
 	 pull_topo/1,
-	 remove_node/0]).
-
+	 remove_node/0,
+	 node_add_prop/1,
+	 node_add_prop/2,
+	 node_rem_prop/1,
+	 node_rem_prop/2]).
 %%Exports for testing purpose
 -export([merge_topo/3]).
 
@@ -76,8 +79,7 @@ create_metadata(Options) ->
     Metadata = [{cluster, Cluster}, {nodes, NodeData}],
 
     {error,"no_table"} = enterdb:table_info("gb_dyno_metadata", [name]),
-    TabOpts = [{type, leveldb},
-	       {data_model, map},
+    TabOpts = [{data_model, map},
 	       {comparator, descending},
 	       {time_series, false},
 	       {num_of_shards, 1},
@@ -215,6 +217,8 @@ pull_topo(Node) ->
 	{ok, History} ->
 	    {ok, Base, Local, Remote} = find_versions(Node, History),
 	    merge_topo(Base, Local, Remote);
+	{badrpc, Reason} = Error ->
+	    {error, Error};
 	{error, Reason} ->
 	    {error, Reason}
     end.
@@ -396,28 +400,53 @@ compare_attribute(A, B) ->
 -spec remove_node() ->
     ok | {error, Reason :: term()}.
 remove_node() ->
-    node_update({removed, true}).
+    node_add_prop({removed, true}).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Add a property of node data that is kept in topology (metadata).
+%% @end
+%%--------------------------------------------------------------------
+node_add_prop({P,V}) ->
+    node_add_prop(node(), {P,V}).
+node_add_prop(Node, {P,V}) ->
+    node_update(add, Node, {P, V}),
+    gb_dyno_gossip:pull(node()).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Remove a property of node data that is kept in topology (metadata).
+%% @end
+%%--------------------------------------------------------------------
+node_rem_prop(P) ->
+    node_rem_prop(node(), P).
+node_rem_prop(Node, P) ->
+    node_update('rem', Node, {P, dummy}),
+    gb_dyno_gossip:pull(node()).
 
 %%--------------------------------------------------------------------
 %% @doc
 %% Update a property of node data that is kept in topology (metadata).
 %% @end
 %%--------------------------------------------------------------------
--spec node_update({Prop :: atom(), Value :: term()}) ->
+-spec node_update(Op :: add | 'rem', Node :: node(), {Prop :: atom(), Value :: term()}) ->
     ok | {error, Reason :: term()}.
-node_update({Prop, Value}) ->
+node_update(Op, N, {Prop, Value}) ->
     {ok, Metadata} = lookup_topo(),
     Cluster = proplists:get_value(cluster, Metadata),
     Nodes = proplists:get_value(nodes, Metadata),
-    N = node(),
     Data = proplists:get_value(N, Nodes),
     
     Version = proplists:get_value(version, Data),
     D1 = proplists:delete(Prop, Data),
     D2 = proplists:delete(version, D1),
     D3 = ordsets:add_element({version, Version + 1}, D2),
-    D4 = ordsets:add_element({Prop, Value}, D3),
-    
+    D4 =
+	if Op =:= add ->
+	    ordsets:add_element({Prop, Value}, D3);
+	true -> %% 'rem' op; just do not add
+	    D3
+    end,
     NewNodes = [{N, D4} | proplists:delete(N, Nodes)],
     SortedNodes = lists:sort(fun compare_nodes/2, NewNodes), 
     NewMetadata = [{cluster, Cluster}, {nodes, SortedNodes}],
