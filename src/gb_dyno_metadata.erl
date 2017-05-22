@@ -83,6 +83,7 @@ create_metadata(Options) ->
 	       {comparator, descending},
 	       {time_series, false},
 	       {num_of_shards, 1},
+	       {system_table, true},
 	       {distributed, false}],
 
     ok = enterdb:create_table("gb_dyno_topo_ix",
@@ -217,7 +218,7 @@ pull_topo(Node) ->
 	{ok, History} ->
 	    {ok, Base, Local, Remote} = find_versions(Node, History),
 	    merge_topo(Base, Local, Remote);
-	{badrpc, Reason} = Error ->
+	{badrpc, _Reason} = Error ->
 	    {error, Error};
 	{error, Reason} ->
 	    {error, Reason}
