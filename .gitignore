@@ -1,6 +1,7 @@
 # ignore any files or folders generated under _build dir
 _build
 *.beam
+ebin
 
 #docs
 doc
@@ -50,3 +51,4 @@ rel/files
 #other
 .concrete/DEV_MODE
 rebar.lock
+.rebar3
