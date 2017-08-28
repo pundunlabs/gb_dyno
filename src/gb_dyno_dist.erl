@@ -28,7 +28,9 @@
 	 call_shards/3,
 	 map_shards/3,
 	 call_shards_seq/2,
-	 map_shards_seq/2]).
+	 map_shards_seq/2,
+	 call_nodes/3,
+	 call_nodes_minimal/3]).
 
 %% Inter Node API
 -export([local/1,
@@ -54,14 +56,11 @@
 -spec topo_call(Req :: {module(), function(), args()},
 		Options :: [{atom(), term()}]) ->
     Response :: term() | {error, Reason :: term()}.
-topo_call({Module, Function, Args}, Options) ->
+topo_call(MFA, Options) ->
     {ok, Topo} = gb_dyno_metadata:lookup_topo(),
     NodeData = proplists:get_value(nodes, Topo, []),
     Nodes = [Node || {Node, _Data} <- NodeData],
-    Timeout = proplists:get_value(timeout, Options, 5000),
-    Revert =  proplists:get_value(revert, Options, undefined),
-    {ResL, BadNodes} = rpc:multicall(Nodes, Module, Function, Args, Timeout),
-    revert_call(Nodes, Revert, Timeout, {ResL, BadNodes}).
+    call_nodes(Nodes, MFA, Options).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -119,7 +118,7 @@ call_shards(Shards, Req, Mode) when Mode == write; Mode == read ->
 %% @doc
 %% Call to execute request Req for all shards on the nodes of each
 %% shard's Ring with consistency requirement that is set for Mode.
-%% Shard name from Shards is adde to Args list of the given Req.
+%% Shard name from Shards is added to Args list of the given Req.
 %% Result is returned in respective order to Shards list.
 %% @end
 %%--------------------------------------------------------------------
@@ -162,6 +161,76 @@ map_shards_seq({Mod, Fun, Args}, Shards) ->
 	    || {Shard, Ring} <- Shards],
     ?debug("Reqs: ~p",[Reqs]),
     spawn_do(fun peval/1, [Reqs]).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Apply request Req on the given nodes.
+%% @end
+%%--------------------------------------------------------------------
+-spec call_nodes(Nodes :: map() | [atom()],
+		 Req :: {module(), function(), args()},
+		 Options :: [{atom(), term()}]) ->
+    Response :: term() | {error, Reason :: term()}.
+call_nodes(Nodes, {Module, Function, Args}, Options) ->
+    Timeout = proplists:get_value(timeout, Options, 5000),
+    Revert =  proplists:get_value(revert, Options, undefined),
+    Nodes_ = case is_map(Nodes) of
+		true -> maps:keys(Nodes);
+		false -> Nodes
+	     end,
+    {ResL, BadNodes} = rpc:multicall(Nodes_, Module, Function, Args, Timeout),
+    revert_call(Nodes, Revert, Timeout, {ResL, BadNodes}).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Call to evaluate request Req on minimal number of nodes to cover
+%% all distributed shards. First succesfull result is used.
+%% @end
+%%--------------------------------------------------------------------
+-spec call_nodes_minimal(NodesMapping :: map(),
+			 Req :: {module(), function(), args()},
+			 Options :: [{atom(), term()}]) ->
+    {ok, map()} | {error, Reason :: term()}.
+call_nodes_minimal(NodesMapping, Req, Options) ->
+    Node = node(),
+    {LocalShards, RemoteNodes} = maps:take(Node, NodesMapping),
+    Rest = maps:to_list(RemoteNodes),
+    Timeout = proplists:get_value(timeout, Options, 5000),
+    Acc = #{covered => [],
+	    uncovered => [],
+	    resl => [],
+	    unique => true},
+    call_nodes_minimal([{Node, LocalShards} | Rest], Req, Timeout, Acc).
+
+call_nodes_minimal([{Node, Shards} | Rest],
+		   {Mod, Fun, Args} = Req, Timeout,
+		   #{covered := Covered,
+		     uncovered := Uncovered,
+		     resl := ResL,
+		     unique := Unique} = Acc) ->
+    case Shards -- Covered of
+	[] ->
+	    call_nodes_minimal(Rest, Req, Timeout, Acc);
+	RemSh ->
+	    case rpc:call(Node, Mod, Fun, Args, Timeout) of
+		{P, _} when P == badrpc ; P == error ->
+		    Nacc = Acc#{uncovered => lists:usort(Shards ++ Uncovered)},
+		    call_nodes_minimal(Rest, Req, Timeout, Nacc);
+		R ->
+		    Nacc = Acc#{covered => lists:usort(Shards ++ Covered),
+				uncovered => Uncovered -- Shards,
+				resl => [R | ResL],
+				unique => check_unique(Unique, Shards, RemSh)},
+		    call_nodes_minimal(Rest, Req, Timeout, Nacc)
+	    end
+    end;
+call_nodes_minimal([], _Req, _Timeout, Acc) ->
+    {ok, Acc}.
+
+check_unique(Unique, Shards, Shards) ->
+    Unique;
+check_unique(_, _, _) ->
+    false.
 
 %%--------------------------------------------------------------------
 %% @doc
