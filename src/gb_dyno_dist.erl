@@ -254,7 +254,7 @@ sync_collect([], _, _, LastError) ->
 %%--------------------------------------------------------------------
 %% @doc
 %% Collect the results from remote nodes and return after consistency
-%% requirement is met. Rest of the results will be handled by a 
+%% requirement is met. Rest of the results will be handled by a
 %% middleman process running receiver/3 code.
 %% @end
 %%--------------------------------------------------------------------
@@ -267,7 +267,7 @@ get_result(Mref, CReq, Results) ->
 	{collect, Node, DC, {Fun, Result}} ->
 	    case check_consistency_met(CReq, {Node, DC, Fun, Result}, Results) of
 		{nok, NewResults} ->
-		    get_result(Mref, CReq, NewResults);  
+		    get_result(Mref, CReq, NewResults);
 		{ok, Response} ->
 		    erlang:demonitor(Mref, [flush]),
 		    Response;
@@ -307,7 +307,7 @@ receiver_loop(Cref, Caller, Monitors, Results) ->
 		    Ref = maps:get(Node, Monitors),
 		    erlang:demonitor(Ref, [flush]),
 		    NewMon = maps:remove(Node, Monitors),
-		    proxy(Caller, {collect, Node, DC, {Fun, Result}}),	
+		    proxy(Caller, {collect, Node, DC, {Fun, Result}}),
 		    receiver_loop(Cref, Caller, NewMon,
 				  [{Node, Result} | Results]);
 		{'DOWN',Cref,_,_,_} ->
@@ -330,7 +330,7 @@ receiver_cleanup(Caller, Monitors, Results) ->
 		{collect, Node, DC, {Fun, Result}} ->
 		    %% Proxy the result if caller alive
 		    erlang:demonitor(Ref, [flush]),
-		    proxy(Caller, {collect, Node, DC, {Fun, Result}}),	
+		    proxy(Caller, {collect, Node, DC, {Fun, Result}}),
 		    [{Node, Result} | Results];
 		{'DOWN',Ref,_,_,Reason} ->
 		    %% Sender down.
@@ -348,7 +348,7 @@ handle_results(Results) ->
 proxy(undefined, _Msg) ->
     ok;
 proxy(Pid, Msg) ->
-    Pid ! Msg. 
+    Pid ! Msg.
 
 -spec multi_call(Req :: [{N :: node(), R :: term(), DC :: string()}],
 		 T :: timeout(),
@@ -581,7 +581,7 @@ revert_call(Nodes, {M, F, A}, Timeout, {ResL, []}) ->
 revert_call(Nodes, {M, F, A}, Timeout, {_ResL, BadNodes}) ->
     {RevResL, RevBadNodes} = rpc:multicall(Nodes -- BadNodes, M, F, A, Timeout),
     ?debug("Revert result: ~p",[{RevResL, RevBadNodes}]),
-    {error, {bad_nodes, BadNodes}}. 
+    {error, {bad_nodes, BadNodes}}.
 
 %%--------------------------------------------------------------------
 %% @doc

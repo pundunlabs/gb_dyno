@@ -66,7 +66,7 @@ do_count([Node|Rest], Map, Count, TotalCount) ->
     do_count(Rest, maps:put(Node, Int+1, Map), Count+1, TotalCount);
 do_count([], Map, Count, TotalCount) ->
     {Count, TotalCount, Map}.
-    
+
 test01(ShardNum, RF)->
     M2 =
 	[{cluster,"cl01"},
@@ -107,7 +107,7 @@ allocate_nodes(Shards, ReplicationFactor) ->
     {ok, Metadata} = gb_dyno_metadata:lookup_topo(),
     NetworkMap = construct_network_map(Metadata),
     AllocatedShards = do_allocate_nodes(Shards, ReplicationFactor, NetworkMap),
-    {ok, AllocatedShards}. 
+    {ok, AllocatedShards}.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -143,7 +143,7 @@ network_map_insert(Node, DC, Rack, Map) ->
 	    RackMap = [{Rack, [Node]}],
 	    [{DC, RackMap} | Map];
 	RackMap ->
-	    NewRackMap = 
+	    NewRackMap =
 		case proplists:get_value(Rack, RackMap, []) of
 		    [] ->
 			[{Rack, [Node]} | RackMap];
@@ -157,7 +157,7 @@ network_map_insert(Node, DC, Rack, Map) ->
 %%--------------------------------------------------------------------
 %% @doc
 %% Allocate nodes to every given shard. ReplicationFactor specified
-%% the number of nodes to be allocated per shard. 
+%% the number of nodes to be allocated per shard.
 %% @end
 %%--------------------------------------------------------------------
 -spec do_allocate_nodes(Shards :: [string()],
@@ -211,10 +211,10 @@ do_allocate_nodes([], _RF, _NetworkMap, _N, Acc) ->
 %%    Fun = fun({_DC, RackMap}, {R, L, Acc1, Acc2})->
 %%		N = get_n(Div, R, L),
 %%		{Ns, UnusedNodes} = get_next_n_node(RackMap, RackShift, N),
-%%		NL = N - length(Ns),  
+%%		NL = N - length(Ns),
 %%		{R - 1, NL, [Ns | Acc1], [UnusedNodes | Acc2]}
 %%	  end,
-%%    
+%%
 %%    {_, Remain, Nodes, UnusedNodes} = lists:foldl(Fun, {Rem, 0, [], []}, Map),
 %%    {Fill, _} = split_by_len(alternate_flatten(UnusedNodes), Remain),
 %%    lists:flatten([Fill|Nodes]).
@@ -233,10 +233,10 @@ choose_nodes(RF, NetworkMap, Shift) ->
     Fun = fun({DC, RackMap}, {R, L, RingAcc, Acc2})->
 		N = get_n(Div, R, L),
 		{Ns, UnusedNodes} = get_next_n_node(RackMap, RackShift, N),
-		NL = N - length(Ns),  
+		NL = N - length(Ns),
 		{R - 1, NL, map_update(DC, Ns, RingAcc), [{DC, UnusedNodes} | Acc2]}
 	  end,
-    
+
     {_, Remain, Ring, UnusedNodes} = lists:foldl(Fun, {Rem, 0, #{}, []}, Map),
     distribute_remaining(Remain, Ring, UnusedNodes).
 
@@ -396,8 +396,8 @@ start_link(Options) ->
 %%--------------------------------------------------------------------
 init(Options) ->
     Hash = proplists:get_value(hash, Options),
-    Cluster = proplists:get_value(cluster, Options), 
-    DC = proplists:get_value(dc, Options), 
+    Cluster = proplists:get_value(cluster, Options),
+    DC = proplists:get_value(dc, Options),
     Rack = proplists:get_value(rack, Options),
     {ok, #state{hash = Hash,
 		cluster = Cluster,

@@ -65,7 +65,7 @@ init([]) ->
     MaxRestarts = 4,
     MaxSecondsBetweenRestarts = 3600,
     SupFlags = {RestartStrategy, MaxRestarts, MaxSecondsBetweenRestarts},
- 
+
     Opts = gb_dyno:read_configuration(),
     {ok, Hash} = init_metadata(Opts),
 

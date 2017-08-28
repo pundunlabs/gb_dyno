@@ -37,7 +37,7 @@ sync_metadata(Pid) ->
     sync_wait_loop(Pid).
 
 sync_wait_loop(Pid) ->
-    receive 
+    receive
 	{'DOWN', _, _, Pid, _} ->
 	    stop;
 	M ->
@@ -57,4 +57,3 @@ do_sync() ->
 	_ ->
 	    ok
     end.
-    

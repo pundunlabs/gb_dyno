@@ -85,4 +85,3 @@ read_configuration() ->
      {write_consistency, list_to_atom(WriteConsistency)},
      {read_consistency, list_to_atom(ReadConsistency)},
      {request_timeout, RequestTimeout}].
-

@@ -70,8 +70,8 @@ init(Opts) ->
 -spec create_metadata(Options :: proplist()) ->
     {ok , Hash :: integer()}.
 create_metadata(Options) ->
-    Cluster = proplists:get_value(cluster, Options), 
-    DC = proplists:get_value(dc, Options), 
+    Cluster = proplists:get_value(cluster, Options),
+    DC = proplists:get_value(dc, Options),
     Rack = proplists:get_value(rack, Options),
 
     Data = ordsets:from_list([{version, 1}, {dc, DC}, {rack, Rack}]),
@@ -206,7 +206,7 @@ fetch_topo_history(Cont, Acc) ->
 %%--------------------------------------------------------------------
 %% @doc
 %% Fetch latest topology metadata from given node and merge with local
-%% topology metadata. Merge suceeds only if two metadata are for same 
+%% topology metadata. Merge suceeds only if two metadata are for same
 %% cluster.
 %% @end
 %%--------------------------------------------------------------------
@@ -356,12 +356,12 @@ resolve_conflict(LData, RData) ->
 	    {ok, LData};
 	true ->
 	    {ok, RData}
-    end.	
+    end.
 
 %%--------------------------------------------------------------------
 %% @doc
 %% Ordering function used as an argument to sort function.
-%% Orders first on dc, second on rack, and last on node name. 
+%% Orders first on dc, second on rack, and last on node name.
 %% @end
 %%--------------------------------------------------------------------
 -spec compare_nodes({NodeA :: node(), DataA :: proplist()},
@@ -437,7 +437,7 @@ node_update(Op, N, {Prop, Value}) ->
     Cluster = proplists:get_value(cluster, Metadata),
     Nodes = proplists:get_value(nodes, Metadata),
     Data = proplists:get_value(N, Nodes),
-    
+
     Version = proplists:get_value(version, Data),
     D1 = proplists:delete(Prop, Data),
     D2 = proplists:delete(version, D1),
@@ -449,6 +449,6 @@ node_update(Op, N, {Prop, Value}) ->
 	    D3
     end,
     NewNodes = [{N, D4} | proplists:delete(N, Nodes)],
-    SortedNodes = lists:sort(fun compare_nodes/2, NewNodes), 
+    SortedNodes = lists:sort(fun compare_nodes/2, NewNodes),
     NewMetadata = [{cluster, Cluster}, {nodes, SortedNodes}],
     commit_topo(NewMetadata).
