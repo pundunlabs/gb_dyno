@@ -447,6 +447,8 @@ single_call(Node, DC, {Mod, Fun, Args}, Timeout, Collector) ->
 		%% Args is the enterdb call, removing the gb_dyno_dist wrapper
 		enterdb_recovery:log_event(Node, hd(Args)),
 		{error, not_ready};
+	    {error, _} = R ->
+		R;
 	    R ->
 		{ok, R}
 	end,
