@@ -70,11 +70,11 @@ check_consistency() ->
 	    ?warning("could not get dyno metadata: ~p", [Error])
     end.
 
-find_oos([{{Shard, oos}, {Type, RemNode}} = OOS | R], Nodes) ->
+find_oos([{{_Shard, oos}, _} = OOS | R], Nodes) ->
     resolve_oos(OOS, Nodes),
     find_oos(R, Nodes);
 
-find_oos([V|R], Nodes) ->
+find_oos([_V|R], Nodes) ->
     find_oos(R, Nodes);
 find_oos([], _) ->
     ok.
@@ -98,5 +98,5 @@ pick_version(Shard, LocalNode, RemNode) when LocalNode < RemNode ->
     rpc:call(RemNode,   enterdb_shard_recovery, stop, [{LocalNode, Shard}]);
 
 %% let the other node resolve the inconsistency
-pick_version(_Shard, LocalNode, RemNode) ->
+pick_version(_Shard, _LocalNode, _RemNode) ->
     ok.
