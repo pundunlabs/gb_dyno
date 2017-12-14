@@ -179,7 +179,7 @@ call_nodes(Nodes, {Module, Function, Args}, Options) ->
 		false -> Nodes
 	     end,
     {ResL, BadNodes} = rpc:multicall(Nodes_, Module, Function, Args, Timeout),
-    revert_call(Nodes, Revert, Timeout, {ResL, BadNodes}).
+    revert_call(Nodes_, Revert, Timeout, {ResL, BadNodes}).
 
 %%--------------------------------------------------------------------
 %% @doc
