@@ -176,7 +176,7 @@ lookup_topo(Hash) ->
     case enterdb:read("gb_dyno_metadata",[{"tag", "topo"}, {"hash", Hash}]) of
 	{ok, [{"data", Metadata}]} ->
 	    {ok, Metadata};
-	{error,{not_found, _}} ->
+	{error, not_found} ->
 	    {error, not_found}
     end.
 
