@@ -159,6 +159,19 @@ node_update(Op, Node, {Prop, Value}) ->
 
 %%--------------------------------------------------------------------
 %% @doc
+%% Fetch latest topology metadata from given node and merge with local
+%% topology metadata. Merge suceeds only if two metadata are for same
+%% cluster. Commit topology if merge is succesful.
+%% @end
+%%--------------------------------------------------------------------
+-spec pull_topo(Node :: node()) ->
+    {ok, Hash :: string(), Merged :: proplist()} |
+    {error, Reason :: string() | {conflict, Node :: node()}}.
+pull_topo(Node) ->
+    gen_server:call(?MODULE, {pull_topo, Node}).
+
+%%--------------------------------------------------------------------
+%% @doc
 %% Initialize metadata tables at startup.
 %% @end
 %%--------------------------------------------------------------------
@@ -225,6 +238,24 @@ handle_call({node_update, Op, Node, Prop, Value}, _From,
     NextState = #{current_id => NewId,
 		  current_hash => NewHash},
     {reply, {ok, NewHash}, NextState};
+handle_call({pull_topo, Node}, _From,
+	    State = #{current_id := Id,
+		      current_hash := Hash}) when Node == node() ->
+    {ok, Value} = enterdb:read("gb_dyno_metadata", [{"id", Id}]),
+    {_, Metadata} = lists:keyfind("metadata", 1, Value),
+    {reply, {ok, Hash, Metadata}, State};
+handle_call({pull_topo, Node}, _From, State = #{current_id := Id}) ->
+    case do_pull_topo(Node) of
+	{ok, Merged} ->
+	    NewHash = erlang:integer_to_list(gb_hash:hash(?ALG, Merged)),
+	    NewId = Id + 1,
+	    ok = do_commit_topo(NewId, Merged, NewHash),
+	    NextState = #{current_id => NewId,
+			  current_hash => NewHash},
+	    {reply, {ok, NewHash, Merged}, NextState};
+	Else ->
+	    {reply, Else, State}
+    end;
 handle_call(_Request, _From, State) ->
     ?warning("Unhandled gen_server call, reuest: ~p", [_Request]),
     {reply, ok, State}.
@@ -314,6 +345,27 @@ do_commit_topo(Id, Metadata, Hash) ->
 
 %%--------------------------------------------------------------------
 %% @doc
+%% Fetch latest topology metadata from given node and merge with local
+%% topology metadata. Merge suceeds only if two metadata are for same
+%% cluster.
+%% @end
+%%--------------------------------------------------------------------
+-spec do_pull_topo(Node :: atom()) ->
+    {ok, Merged :: term()} |
+    {error, Reason :: string()}.
+do_pull_topo(Node) ->
+    case rpc:call(Node, ?MODULE, fetch_topo_history, []) of
+	{ok, RemoteHistory} ->
+	    {ok, Base, Local, Remote} = find_versions(RemoteHistory),
+	    merge_topo(Base, Local, Remote);
+	{badrpc, _Reason} = Error ->
+	    {error, Error};
+	{error, Reason} ->
+	    {error, Reason}
+    end.
+
+%%--------------------------------------------------------------------
+%% @doc
 %% Get all data stored in gb_dyno_topo_ix.
 %% @end
 %%--------------------------------------------------------------------
@@ -331,27 +383,6 @@ fetch_topo_history(Cont, Acc) ->
 	    {ok, lists:append(Acc, List)};
 	{ok, List, NewCont} ->
 	    fetch_topo_history(NewCont, lists:append(Acc, List));
-	{error, Reason} ->
-	    {error, Reason}
-    end.
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Fetch latest topology metadata from given node and merge with local
-%% topology metadata. Merge suceeds only if two metadata are for same
-%% cluster.
-%% @end
-%%--------------------------------------------------------------------
--spec pull_topo(Node :: node()) ->
-    {ok, Merged :: proplist()} |
-    {error, Reason :: string() | {conflict, Node :: node()}}.
-pull_topo(Node) ->
-    case rpc:call(Node, ?MODULE, fetch_topo_history, []) of
-	{ok, RemoteHistory} ->
-	    {ok, Base, Local, Remote} = find_versions(RemoteHistory),
-	    merge_topo(Base, Local, Remote);
-	{badrpc, _Reason} = Error ->
-	    {error, Error};
 	{error, Reason} ->
 	    {error, Reason}
     end.

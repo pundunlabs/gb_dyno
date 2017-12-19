@@ -60,8 +60,7 @@ start_link() ->
     ok | {error, Reason :: term()}.
 pull(RemoteNode) ->
     case gb_dyno_metadata:pull_topo(RemoteNode) of
-	{ok, Metadata} ->
-	    {ok, Hash} = gb_dyno_metadata:commit_topo(Metadata),
+	{ok, Hash, Metadata} ->
 	    gen_server:cast({?MODULE, node()}, {commit, Hash, Metadata});
 	{error, Reason} ->
 	    {error, Reason}
