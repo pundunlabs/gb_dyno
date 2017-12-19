@@ -131,8 +131,7 @@ remove_node() ->
 node_add_prop({P, V}) ->
     node_add_prop(node(), {P, V}).
 node_add_prop(Node, {P, V}) ->
-    node_update('add', Node, {P, V}),
-    gb_dyno_gossip:pull(node()).
+    node_update('add', Node, {P, V}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -142,8 +141,7 @@ node_add_prop(Node, {P, V}) ->
 node_rem_prop(P) ->
     node_rem_prop(node(), P).
 node_rem_prop(Node, P) ->
-    node_update('rem', Node, {P, dummy}),
-    gb_dyno_gossip:pull(node()).
+    node_update('rem', Node, {P, dummy}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -151,7 +149,7 @@ node_rem_prop(Node, P) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec node_update(Op :: 'add '| 'rem',
-		  Node :: node(),
+		  Node :: atom(),
 		  {Prop :: atom(), Value :: term()}) ->
     ok | {error, Reason :: term()}.
 node_update(Op, Node, {Prop, Value}) ->
@@ -244,15 +242,20 @@ handle_call({pull_topo, Node}, _From,
     {ok, Value} = enterdb:read("gb_dyno_metadata", [{"id", Id}]),
     {_, Metadata} = lists:keyfind("metadata", 1, Value),
     {reply, {ok, Hash, Metadata}, State};
-handle_call({pull_topo, Node}, _From, State = #{current_id := Id}) ->
+handle_call({pull_topo, Node}, _From, State = #{current_id := Id,
+						current_hash := Hash}) ->
     case do_pull_topo(Node) of
 	{ok, Merged} ->
-	    NewHash = erlang:integer_to_list(gb_hash:hash(?ALG, Merged)),
-	    NewId = Id + 1,
-	    ok = do_commit_topo(NewId, Merged, NewHash),
-	    NextState = #{current_id => NewId,
-			  current_hash => NewHash},
-	    {reply, {ok, NewHash, Merged}, NextState};
+	    case erlang:integer_to_list(gb_hash:hash(?ALG, Merged)) of
+		Hash ->
+		    {reply, {ok, Hash, Merged}, State};
+		NewHash ->
+		    NewId = Id + 1,
+		    ok = do_commit_topo(NewId, Merged, NewHash),
+		    NextState = #{current_id => NewId,
+				  current_hash => NewHash},
+		    {reply, {ok, NewHash, Merged}, NextState}
+	    end;
 	Else ->
 	    {reply, Else, State}
     end;
