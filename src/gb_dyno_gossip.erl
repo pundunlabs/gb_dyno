@@ -25,7 +25,7 @@
 -behaviour(gen_server).
 
 %% API functions
--export([start_link/1,
+-export([start_link/0,
 	 pull/1]).
 
 %% gen_server callbacks
@@ -50,8 +50,8 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Options) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, Options, []).
+start_link() ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -78,11 +78,12 @@ pull(RemoteNode) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init(Options) ->
-    Hash = proplists:get_value(hash, Options),
-    Cluster = proplists:get_value(cluster, Options),
-    DC = proplists:get_value(dc, Options),
-    Rack = proplists:get_value(rack, Options),
+init([]) ->
+    ?debug("Starting ~p server..", [?MODULE]),
+    Hash = gb_dyno_metadata:get_current_hash(),
+    Cluster = gb_dyno:conf(cluster),
+    DC = gb_dyno:conf(dc),
+    Rack = gb_dyno:conf(rack),
     proc_lib:spawn_link(gb_dyno_gossip_sync, start, [self()]),
 
     %% Be sure that sync is done before we return

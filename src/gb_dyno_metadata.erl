@@ -22,8 +22,11 @@
 
 -module(gb_dyno_metadata).
 
-%% API
--export([init/1,
+-behaviour(gen_server).
+
+%% API functions
+-export([start_link/0,
+	 get_current_hash/0,
 	 commit_topo/1,
 	 lookup_topo/0,
 	 lookup_topo/1,
@@ -34,6 +37,15 @@
 	 node_add_prop/2,
 	 node_rem_prop/1,
 	 node_rem_prop/2]).
+
+%% gen_server callbacks
+-export([init/1,
+         handle_call/3,
+         handle_cast/2,
+         handle_info/2,
+         terminate/2,
+         code_change/3]).
+
 %%Exports for testing purpose
 -export([merge_topo/3]).
 
@@ -42,37 +54,214 @@
 -type value() :: [{string(), term()}].
 -type kvp() :: {key(), value()}.
 
+-include_lib("gb_log/include/gb_log.hrl").
 -define(ALG, sha).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Start this server.
+%% @end
+%%--------------------------------------------------------------------
+start_link() ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Get the current hash value of topology metadata.
+%% @end
+%%--------------------------------------------------------------------
+-spec get_current_hash() ->
+    Hash :: string().
+get_current_hash() ->
+    gen_server:call(?MODULE, get_current_hash).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Commit new topology metadata.
+%% @end
+%%--------------------------------------------------------------------
+-spec commit_topo(Metadata :: term()) ->
+    {ok, Hash :: string()}.
+commit_topo(Metadata) ->
+    gen_server:call(?MODULE, {commit_topo, Metadata}).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Lookup latest topology metadata.
+%% @end
+%%--------------------------------------------------------------------
+-spec lookup_topo() ->
+    {ok, Metadata :: proplist()} | {error, Reason :: term()}.
+lookup_topo() ->
+    gen_server:call(?MODULE, lookup_topo).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Lookup for a topology metadata that is identified by it's hash
+%% value.
+%% @end
+%%--------------------------------------------------------------------
+-spec lookup_topo(Hash :: string()) ->
+    {ok, Metadata :: proplist()} | {error, Reason :: term()}.
+lookup_topo(Hash) ->
+    case enterdb:index_read("gb_dyno_metadata", "hash", Hash) of
+	{ok, [#{key := Key}]} ->
+	    {ok, Value} = enterdb:read("gb_dyno_metadata", Key),
+	    {_, Metadata} = lists:keyfind("metadata", 1, Value),
+	    {ok, Metadata};
+	{error, not_found} ->
+	    {error, not_found}
+    end.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Remove local node from topology (metadata).
+%% @end
+%%--------------------------------------------------------------------
+-spec remove_node() ->
+    ok | {error, Reason :: term()}.
+remove_node() ->
+    node_add_prop({removed, true}).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Add a property of node data that is kept in topology (metadata).
+%% @end
+%%--------------------------------------------------------------------
+node_add_prop({P, V}) ->
+    node_add_prop(node(), {P, V}).
+node_add_prop(Node, {P, V}) ->
+    node_update('add', Node, {P, V}),
+    gb_dyno_gossip:pull(node()).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Remove a property of node data that is kept in topology (metadata).
+%% @end
+%%--------------------------------------------------------------------
+node_rem_prop(P) ->
+    node_rem_prop(node(), P).
+node_rem_prop(Node, P) ->
+    node_update('rem', Node, {P, dummy}),
+    gb_dyno_gossip:pull(node()).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Update a property of node data that is kept in topology (metadata).
+%% @end
+%%--------------------------------------------------------------------
+-spec node_update(Op :: 'add '| 'rem',
+		  Node :: node(),
+		  {Prop :: atom(), Value :: term()}) ->
+    ok | {error, Reason :: term()}.
+node_update(Op, Node, {Prop, Value}) ->
+    gen_server:call(?MODULE, {node_update, Op, Node, Prop, Value}).
 
 %%--------------------------------------------------------------------
 %% @doc
 %% Initialize metadata tables at startup.
 %% @end
 %%--------------------------------------------------------------------
--spec init(Opts :: proplist()) ->
-    {ok, Hash :: integer()}.
-init(Opts) ->
-    case enterdb:read("gb_dyno_metadata", [{"tag","hash"},{"hash","current"}]) of
-	{ok, Value} ->
-	    {_, Hash} = lists:keyfind("data", 1, Value),
-	    {ok, Hash};
-	{error,"no_table"} ->
-	    create_metadata(Opts);
-	{error, "table_closed"} ->
-	    open_tables()
-    end.
+-spec init(Args :: []) ->
+    {ok, State :: map()}.
+init([]) ->
+    ?info("Starting ~p server..", [?MODULE]),
+    State =
+	case enterdb:first("gb_dyno_metadata") of
+	    {ok, {Key, Value}, _} ->
+		{_, Id} = lists:keyfind("id", 1, Key),
+		{_, Hash} = lists:keyfind("hash", 1, Value),
+		#{current_id => Id, current_hash => Hash};
+	    {error,"no_table"} ->
+		create_metadata();
+	    {error, "table_closed"} ->
+		open_tables()
+	end,
+    {ok, State}.
+
+-spec handle_call(Request :: term(),
+		  From :: {Pid :: pid(), Tag :: term()},
+		  State :: map()) ->
+    {reply, Reply :: term(), State :: map()}.
+handle_call(get_current_hash, _From, State= #{current_hash := Hash}) ->
+    {reply, Hash, State};
+handle_call({commit_topo, Metadata}, _From, State = #{current_id := Id,
+						      current_hash := Hash}) ->
+    case erlang:integer_to_list(gb_hash:hash(?ALG, Metadata)) of
+	Hash ->
+	    {reply, {ok, Hash}, State};
+	NewHash ->
+	    NewId = Id + 1,
+	    ok = do_commit_topo(NewId, Metadata, NewHash),
+	    NextState = #{current_id => NewId,
+			  current_hash => NewHash},
+	    {reply, {ok, NewHash}, NextState}
+    end;
+handle_call(lookup_topo, _From, State = #{current_hash := Hash}) ->
+    {reply, lookup_topo(Hash), State};
+handle_call({node_update, Op, Node, Prop, Value}, _From,
+	    _S = #{current_id := Id, current_hash := Hash}) ->
+    {ok, Metadata} = lookup_topo(Hash),
+    Cluster = proplists:get_value(cluster, Metadata),
+    Nodes = proplists:get_value(nodes, Metadata),
+    Data = proplists:get_value(Node, Nodes),
+
+    Version = proplists:get_value(version, Data),
+    D1 = proplists:delete(Prop, Data),
+    D2 = proplists:delete(version, D1),
+    D3 = ordsets:add_element({version, Version + 1}, D2),
+    D4 =
+	if Op =:= add ->
+	    ordsets:add_element({Prop, Value}, D3);
+	true -> %% 'rem' op; just do not add
+	    D3
+    end,
+    NewNodes = [{Node, D4} | proplists:delete(Node, Nodes)],
+    SortedNodes = lists:sort(fun compare_nodes/2, NewNodes),
+    NewMetadata = [{cluster, Cluster}, {nodes, SortedNodes}],
+    NewHash = erlang:integer_to_list(gb_hash:hash(?ALG, NewMetadata)),
+    NewId = Id+1,
+    ok = do_commit_topo(NewId, NewMetadata, NewHash),
+    NextState = #{current_id => NewId,
+		  current_hash => NewHash},
+    {reply, {ok, NewHash}, NextState};
+handle_call(_Request, _From, State) ->
+    ?warning("Unhandled gen_server call, reuest: ~p", [_Request]),
+    {reply, ok, State}.
+
+-spec handle_cast(Msg :: term(), State :: map()) ->
+    {noreply, State :: map()}.
+handle_cast(_Msg, State) ->
+    {noreply, State}.
+
+-spec handle_info(Info :: term(), State :: map()) ->
+    {noreply, State :: map()}.
+handle_info(_Info, State) ->
+    {noreply, State}.
+
+-spec terminate(Reason :: term(), State :: map())->
+    ok.
+terminate(_Reason, _State) ->
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Internal Functions
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%--------------------------------------------------------------------
 %% @doc
 %% Create tables for metadata.
 %% @end
 %%--------------------------------------------------------------------
--spec create_metadata(Options :: proplist()) ->
-    {ok , Hash :: integer()}.
-create_metadata(Options) ->
-    Cluster = proplists:get_value(cluster, Options),
-    DC = proplists:get_value(dc, Options),
-    Rack = proplists:get_value(rack, Options),
+-spec create_metadata() ->
+    {ok, State :: map()}.
+create_metadata() ->
+    Cluster = gb_dyno:conf(cluster),
+    DC = gb_dyno:conf(dc),
+    Rack = gb_dyno:conf(rack),
 
     Data = ordsets:from_list([{version, 1}, {dc, DC}, {rack, Rack}]),
     NodeData = [{node(), Data}],
@@ -86,11 +275,12 @@ create_metadata(Options) ->
 	       {system_table, true},
 	       {distributed, false}],
 
-    ok = enterdb:create_table("gb_dyno_topo_ix",
-			      ["ix"], TabOpts),
-    ok = enterdb:create_table("gb_dyno_metadata",
-			      ["tag", "hash"], TabOpts),
-    commit_topo(Metadata, 1).
+    ok = enterdb:create_table("gb_dyno_metadata", ["id"], TabOpts),
+    ok = enterdb:add_index("gb_dyno_metadata", ["hash"]),
+    Id = 1,
+    Hash = erlang:integer_to_list(gb_hash:hash(?ALG, Metadata)),
+    ok = do_commit_topo(Id, Metadata, Hash),
+    #{current_id => Id, current_hash => Hash}.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -98,26 +288,13 @@ create_metadata(Options) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec open_tables() ->
-    {ok , Hash :: integer()}.
+    {ok , State :: map()}.
 open_tables() ->
-    ok = enterdb:open_table("gb_dyno_topo_ix"),
     ok = enterdb:open_table("gb_dyno_metadata"),
-    {ok, {_, Value}, _} = enterdb:first("gb_dyno_topo_ix"),
+    {ok, {Key, Value}, _} = enterdb:first("gb_dyno_metadata"),
+    {_, Id} = lists:keyfind("id", 1, Key),
     {_, Hash} = lists:keyfind("hash", 1, Value),
-    {ok, Hash}.
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Commit new metadata with topo(topology) tag. The committed data
-%% represents the dyno topology from a local point of view.
-%% @end
-%%--------------------------------------------------------------------
--spec commit_topo(Metadata :: proplist()) ->
-    {ok, Hash :: integer()}.
-commit_topo(Metadata) ->
-    {ok, {[{"ix", Ix}], [{"hash",OldHash}]}, _} = enterdb:first("gb_dyno_topo_ix"),
-    NewHash = gb_hash:hash(?ALG, Metadata),
-    commit_topo(Metadata, Ix+1, NewHash, OldHash).
+    #{current_id => Id, current_hash => Hash}.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -126,59 +303,14 @@ commit_topo(Metadata) ->
 %% point of view.
 %% @end
 %%--------------------------------------------------------------------
--spec commit_topo(Metadata :: proplist(),
-		  Ix :: pos_integer()) ->
-    {ok, Hash :: integer()}.
-commit_topo(Metadata, Ix) ->
-    Hash = gb_hash:hash(?ALG, Metadata),
-    commit_topo(Metadata, Ix, Hash, undefined).
-
--spec commit_topo(Metadata :: proplist(),
-		  Ix :: pos_integer(),
-		  Hash :: integer(),
-		  OldHash :: integer()) ->
-    {ok, Hash :: integer()}.
-%% don't store if we have the same hash
-commit_topo(_Metadata, _Ix, Hash, OldHash) when Hash =:= OldHash ->
-    {ok, Hash};
-commit_topo(Metadata, Ix, Hash, _OldHash) ->
-    ok = enterdb:write("gb_dyno_topo_ix",
-		       [{"ix", Ix}], [{"hash", Hash}]),
-    ok = enterdb:write("gb_dyno_metadata",
-		       [{"tag", "topo"}, {"hash", Hash}],
-		       [{"data", Metadata}]),
-    ok = enterdb:write("gb_dyno_metadata",
-		       [{"tag", "hash"}, {"hash", "current"}],
-		       [{"data", Hash}]),
-    {ok, Hash}.
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Lookup latest topology metadata.
-%% @end
-%%--------------------------------------------------------------------
--spec lookup_topo() ->
-    {ok, Metadata :: proplist()} | {error, Reason :: term()}.
-lookup_topo() ->
-    {ok, Value} = enterdb:read("gb_dyno_metadata", [{"tag", "hash"}, {"hash","current"}]),
-    {_, Hash} = lists:keyfind("data", 1, Value),
-    lookup_topo(Hash).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Lookup for a topology metadata that is identified by it's hash
-%% value.
-%% @end
-%%--------------------------------------------------------------------
--spec lookup_topo(Hash :: integer()) ->
-    {ok, Metadata :: proplist()} | {error, Reason :: term()}.
-lookup_topo(Hash) ->
-    case enterdb:read("gb_dyno_metadata",[{"tag", "topo"}, {"hash", Hash}]) of
-	{ok, [{"data", Metadata}]} ->
-	    {ok, Metadata};
-	{error, not_found} ->
-	    {error, not_found}
-    end.
+-spec do_commit_topo(Id :: pos_integer(),
+		     Metadata :: proplist(),
+		     Hash :: string()) ->
+    ok | {error, Reason :: term()}.
+do_commit_topo(Id, Metadata, Hash) ->
+    enterdb:write("gb_dyno_metadata",
+		  [{"id", Id}],
+		  [{"hash", Hash}, {"metadata", Metadata}]).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -188,17 +320,17 @@ lookup_topo(Hash) ->
 -spec fetch_topo_history() ->
     {ok, History :: [kvp()]} | {error, Reason :: term()}.
 fetch_topo_history() ->
-    {ok, {Key, _}, _} = enterdb:first("gb_dyno_topo_ix"),
+    {ok, {Key, _}, _} = enterdb:first("gb_dyno_metadata"),
     fetch_topo_history(Key, []).
 
 -spec fetch_topo_history(Cont :: term(), Acc :: [term()]) ->
      {ok, History :: [kvp()]} | {error, Reason :: term()}.
 fetch_topo_history(Cont, Acc) ->
-    case enterdb:read_range("gb_dyno_topo_ix", {Cont, [{"ix", 0}]}, 1000) of
+    case enterdb:read_range("gb_dyno_metadata", {Cont, [{"id", 0}]}, 1000) of
 	{ok, List, complete} ->
 	    {ok, lists:append(Acc, List)};
 	{ok, List, NewCont} ->
-	    fetch_topo_history(NewCont, lists:append(Acc,List));
+	    fetch_topo_history(NewCont, lists:append(Acc, List));
 	{error, Reason} ->
 	    {error, Reason}
     end.
@@ -215,8 +347,8 @@ fetch_topo_history(Cont, Acc) ->
     {error, Reason :: string() | {conflict, Node :: node()}}.
 pull_topo(Node) ->
     case rpc:call(Node, ?MODULE, fetch_topo_history, []) of
-	{ok, History} ->
-	    {ok, Base, Local, Remote} = find_versions(Node, History),
+	{ok, RemoteHistory} ->
+	    {ok, Base, Local, Remote} = find_versions(RemoteHistory),
 	    merge_topo(Base, Local, Remote);
 	{badrpc, _Reason} = Error ->
 	    {error, Error};
@@ -224,27 +356,30 @@ pull_topo(Node) ->
 	    {error, Reason}
     end.
 
--spec find_versions(Node :: node(), History :: [kvp()])->
+-spec find_versions(RemoteHistory :: [kvp()])->
     {ok, Base :: proplist(), Local :: proplist(), Remote :: proplist()}.
-find_versions(Node, History = [{_, [{_, RemoteHash}]} | _]) ->
-    HashMap = maps:from_list([{H, true} || {_, [{_, H}]} <- History]),
-    {ok, Remote} = rpc:call(Node, ?MODULE, lookup_topo, [RemoteHash]),
-
-    {ok, LocalHistory = [{_, [{_, LocalHash}]} | _]} = fetch_topo_history(),
-    {ok, Local} = lookup_topo(LocalHash),
-
-    {ok, Base} = find_common_ancestor(LocalHistory, HashMap),
-
+find_versions(RemoteHistory = [{_, RemoteValue} | _]) ->
+    RemoteHashes = [begin
+			{_, H} = lists:keyfind("hash", 1, V),
+			H
+		    end || {_, V} <- RemoteHistory],
+    {ok, LocalHistory = [{_, LocalValue} | _]} = fetch_topo_history(),
+    {ok, Base} = find_common_ancestor(LocalHistory, RemoteHashes),
+    {_, Local} = lists:keyfind("metadata", 1, LocalValue),
+    {_, Remote} = lists:keyfind("metadata", 1, RemoteValue),
     {ok, Base, Local, Remote}.
 
--spec find_common_ancestor(History :: [kvp()], Map :: map()) ->
+-spec find_common_ancestor(History :: [kvp()],
+			   RemoteHashes :: [string()]) ->
     {ok, Metadata :: proplist()} | {error, Reason :: term()}.
-find_common_ancestor([{_, [{_, Hash}]} | Rest], Map) ->
-    case maps:is_key(Hash, Map) of
+find_common_ancestor([{_, Value} | Rest], RemoteHashes) ->
+    {_, Hash} = lists:keyfind("hash", 1, Value),
+    case lists:member(Hash, RemoteHashes) of
 	true ->
-	    lookup_topo(Hash);
+	    {_, Metadata} = lists:keyfind("metadata", 1, Value),
+	    {ok, Metadata};
 	false ->
-	    find_common_ancestor(Rest, Map)
+	    find_common_ancestor(Rest, RemoteHashes)
     end;
 find_common_ancestor([], _Map) ->
     {ok, []}.
@@ -392,63 +527,3 @@ compare_attribute(A, B) ->
 	A > B -> false;
 	true -> equal
     end.
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Remove local node from topology (metadata).
-%% @end
-%%--------------------------------------------------------------------
--spec remove_node() ->
-    ok | {error, Reason :: term()}.
-remove_node() ->
-    node_add_prop({removed, true}).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Add a property of node data that is kept in topology (metadata).
-%% @end
-%%--------------------------------------------------------------------
-node_add_prop({P,V}) ->
-    node_add_prop(node(), {P,V}).
-node_add_prop(Node, {P,V}) ->
-    node_update(add, Node, {P, V}),
-    gb_dyno_gossip:pull(node()).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Remove a property of node data that is kept in topology (metadata).
-%% @end
-%%--------------------------------------------------------------------
-node_rem_prop(P) ->
-    node_rem_prop(node(), P).
-node_rem_prop(Node, P) ->
-    node_update('rem', Node, {P, dummy}),
-    gb_dyno_gossip:pull(node()).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Update a property of node data that is kept in topology (metadata).
-%% @end
-%%--------------------------------------------------------------------
--spec node_update(Op :: add | 'rem', Node :: node(), {Prop :: atom(), Value :: term()}) ->
-    ok | {error, Reason :: term()}.
-node_update(Op, N, {Prop, Value}) ->
-    {ok, Metadata} = lookup_topo(),
-    Cluster = proplists:get_value(cluster, Metadata),
-    Nodes = proplists:get_value(nodes, Metadata),
-    Data = proplists:get_value(N, Nodes),
-
-    Version = proplists:get_value(version, Data),
-    D1 = proplists:delete(Prop, Data),
-    D2 = proplists:delete(version, D1),
-    D3 = ordsets:add_element({version, Version + 1}, D2),
-    D4 =
-	if Op =:= add ->
-	    ordsets:add_element({Prop, Value}, D3);
-	true -> %% 'rem' op; just do not add
-	    D3
-    end,
-    NewNodes = [{N, D4} | proplists:delete(N, Nodes)],
-    SortedNodes = lists:sort(fun compare_nodes/2, NewNodes),
-    NewMetadata = [{cluster, Cluster}, {nodes, SortedNodes}],
-    commit_topo(NewMetadata).

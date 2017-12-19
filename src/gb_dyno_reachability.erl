@@ -24,7 +24,7 @@
 -behaviour(gen_server).
 
 %% API functions
--export([start_link/1,
+-export([start_link/0,
 	 metadata_update/1,
 	 multi_call_result/2,
 	 db_op_result/2,
@@ -76,8 +76,8 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Options) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, Options, []).
+start_link() ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -143,11 +143,10 @@ reachability_check() ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init(Options) ->
-    ?debug("Starting ~p server. Options: ~p", [?MODULE, Options]),
-    CheckInterval = proplists:get_value(reachability_check_interval, Options),
-    Hash = proplists:get_value(hash, Options),
-    {ok, Metadata} = gb_dyno_metadata:lookup_topo(Hash),
+init([]) ->
+    ?debug("Starting ~p server..", [?MODULE]),
+    CheckInterval = gb_dyno:conf(reachability_check_interval),
+    {ok, Metadata} = gb_dyno_metadata:lookup_topo(),
     ?debug("~p, Metadata: ~p", [?MODULE, Metadata]),
     Nodes = construct_node_info(Metadata),
     ?debug("~p, Nodes: ~p", [?MODULE, Nodes]),
