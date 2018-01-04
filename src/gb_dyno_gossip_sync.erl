@@ -33,7 +33,7 @@ start(Pid) ->
     sync_metadata(Pid).
 
 sync_metadata(Pid) ->
-    do_sync(),
+    spawn_and_wait(fun() -> do_sync() end),
     sync_wait_loop(Pid).
 
 sync_wait_loop(Pid) ->
@@ -100,3 +100,14 @@ pick_version(Shard, LocalNode, RemNode) when LocalNode < RemNode ->
 %% let the other node resolve the inconsistency
 pick_version(_Shard, _LocalNode, _RemNode) ->
     ok.
+
+spawn_and_wait(Fun) ->
+    {_Pid, Ref} =
+	erlang:spawn_monitor(Fun),
+    receive
+	{'DOWN', Ref, process, _, normal} ->
+	    ok;
+	{'DOWN', Ref, process, Pid, Reason} ->
+	    ?info("none normal exit ~p with reason ~p", [Pid, Reason]),
+	    ok
+    end.
