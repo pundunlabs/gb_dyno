@@ -109,7 +109,7 @@ lookup_topo(Hash) ->
 	    {ok, Value} = enterdb:read("gb_dyno_metadata", Key),
 	    {_, Metadata} = lists:keyfind("metadata", 1, Value),
 	    {ok, Metadata};
-	{error, not_found} ->
+	{ok, []} ->
 	    {error, not_found}
     end.
 
