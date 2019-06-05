@@ -314,6 +314,8 @@ sync_collect([Node | Rest], {Mod, Fun, Args}, Timeout, _) ->
     case rpc:call(Node, Mod, Fun, Args, Timeout) of
         {badrpc, _} = R->
 	    sync_collect(Rest, {Mod, Fun, Args}, Timeout, R);
+        {error, no_ns_entry} = R->
+	    sync_collect(Rest, {Mod, Fun, Args}, Timeout, R);
 	R ->
 	    R
     end;
