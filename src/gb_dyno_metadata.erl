@@ -93,7 +93,12 @@ commit_topo(Metadata) ->
 -spec lookup_topo() ->
     {ok, Metadata :: proplist()} | {error, Reason :: term()}.
 lookup_topo() ->
-    gen_server:call(?MODULE, lookup_topo).
+    try
+	gen_server:call(?MODULE, lookup_topo)
+    catch exit:{timeout,_} = R:ST ->
+	?error("could not lookup topo ~p", [{R,ST}]),
+	{error, timeout}
+    end.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -166,7 +171,12 @@ node_update(Op, Node, {Prop, Value}) ->
     {ok, Hash :: string(), Merged :: proplist()} |
     {error, Reason :: string() | {conflict, Node :: node()}}.
 pull_topo(Node) ->
-    gen_server:call(?MODULE, {pull_topo, Node}).
+    try
+	gen_server:call(?MODULE, {pull_topo, Node})
+    catch C:E:ST ->
+	?info("couldn't get topo ~p:~p ~p", [C,E,ST]),
+	{error, E}
+    end.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -178,7 +188,7 @@ pull_topo(Node) ->
 init([]) ->
     ?info("Starting ~p server..", [?MODULE]),
     State =
-	case enterdb:first("gb_dyno_metadata") of
+	case get_first(5) of
 	    {ok, {Key, Value}, _} ->
 		{_, Id} = lists:keyfind("id", 1, Key),
 		{_, Hash} = lists:keyfind("hash", 1, Value),
@@ -325,7 +335,9 @@ create_metadata() ->
     {ok , State :: map()}.
 open_tables() ->
     ok = enterdb:open_table("gb_dyno_metadata"),
+    ?info("gb_dyno_metadata table opened ok"),
     {ok, {Key, Value}, _} = enterdb:first("gb_dyno_metadata"),
+    ?info("first from gb_dyno_metadata ~p", [{Key, Value}]),
     {_, Id} = lists:keyfind("id", 1, Key),
     {_, Hash} = lists:keyfind("hash", 1, Value),
     #{current_id => Id, current_hash => Hash}.
@@ -342,6 +354,8 @@ open_tables() ->
 		     Hash :: string()) ->
     ok | {error, Reason :: term()}.
 do_commit_topo(Id, Metadata, Hash) ->
+    %% only keep limited number of ids in history
+    enterdb:delete("gb_dyno_metadata", [{"id", Id-100}]),
     enterdb:write("gb_dyno_metadata",
 		  [{"id", Id}],
 		  [{"hash", Hash}, {"metadata", Metadata}]).
@@ -357,7 +371,7 @@ do_commit_topo(Id, Metadata, Hash) ->
     {ok, Merged :: term()} |
     {error, Reason :: string()}.
 do_pull_topo(Node) ->
-    case rpc:call(Node, ?MODULE, fetch_topo_history, []) of
+    case rpc:call(Node, ?MODULE, fetch_topo_history, [], 2000) of
 	{ok, RemoteHistory} ->
 	    {ok, Base, Local, Remote} = find_versions(RemoteHistory),
 	    merge_topo(Base, Local, Remote);
@@ -561,3 +575,13 @@ compare_attribute(A, B) ->
 	A > B -> false;
 	true -> equal
     end.
+
+get_first(Tries) when Tries > 0 ->
+    try
+	enterdb:first("gb_dyno_metadata")
+    catch exit:{timeout, _} = R:ST ->
+	?error("couldn't read first data from gb_dyno_metadata ~p", [{R,ST}]),
+	get_first(Tries-1)
+    end;
+get_first(_Tries) ->
+    {error, cannot_read_table}.
